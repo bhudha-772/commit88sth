@@ -1,0 +1,43 @@
+cd C:\Users\HP\Desktop\HeroX
+
+# create a good .gitignore for Python projects
+# Virtual env
+venv/
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.sqlite3
+
+# OS / IDE files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# logs and runtime files
+.hero_logs/
+*.pid
+TXT
+
+# optional: create README and license
+echo "# HeroX" > README.md
+echo "Initial commit" > .gitmessage
+
+
+
+
+
+
+
+
+ticks.csv
+
+# Python venv
+.venv/
+# Optional: virtualenv/venv naming variants
+venv/
+ENV/
+
