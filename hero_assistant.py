@@ -154,6 +154,9 @@ class HeroAssistantEngine:
         self.news_ttl_sec = max(600, int(os.environ.get("HERO_ASSISTANT_NEWS_TTL_SEC", "172800")))
         self.research_interval_sec = max(60, int(os.environ.get("HERO_ASSISTANT_RESEARCH_INTERVAL_SEC", "120")))
         self.auto_research_enabled = str(os.environ.get("HERO_ASSISTANT_AUTO_RESEARCH", "1")).strip().lower() in ("1", "true", "yes", "on")
+        self.research_transient_backoff_sec = max(self.research_interval_sec, int(os.environ.get("HERO_ASSISTANT_RESEARCH_TRANSIENT_BACKOFF_SEC", "300")))
+        self.research_auth_backoff_sec = max(self.research_interval_sec, int(os.environ.get("HERO_ASSISTANT_RESEARCH_AUTH_BACKOFF_SEC", "21600")))
+        self.research_error_notify_cooldown_sec = max(60, int(os.environ.get("HERO_ASSISTANT_RESEARCH_ERROR_NOTIFY_COOLDOWN_SEC", "1800")))
         self.auto_topics: List[str] = [
             "forex market structure and trend continuation setups",
             "deriv higher/lower and rise/fall strategy updates",
@@ -188,6 +191,8 @@ class HeroAssistantEngine:
         self.last_research_ts = 0
         self.last_research_status = "idle"
         self.last_research_error = ""
+        self.research_pause_until_ts = 0
+        self._notify_recent: Dict[str, int] = {}
 
         self._load_state()
         self._load_logs()
@@ -224,6 +229,7 @@ class HeroAssistantEngine:
             "last_research_ts": int(self.last_research_ts or 0),
             "last_research_status": str(self.last_research_status or "idle"),
             "last_research_error": str(self.last_research_error or ""),
+            "research_pause_until_ts": int(self.research_pause_until_ts or 0),
             "total_research_cycles": int(self.total_research_cycles or 0),
             "total_tick_events": self.total_tick_events,
             "total_analysis_events": self.total_analysis_events,
@@ -263,6 +269,7 @@ class HeroAssistantEngine:
             self.last_research_ts = int(payload.get("last_research_ts") or 0)
             self.last_research_status = str(payload.get("last_research_status") or "idle")
             self.last_research_error = str(payload.get("last_research_error") or "")
+            self.research_pause_until_ts = int(payload.get("research_pause_until_ts") or 0)
             self.total_research_cycles = int(payload.get("total_research_cycles") or 0)
             self.total_tick_events = int(payload.get("total_tick_events") or 0)
             self.total_analysis_events = int(payload.get("total_analysis_events") or 0)
@@ -402,17 +409,59 @@ class HeroAssistantEngine:
             return "WIN" if profit > 0 else "LOSS"
         return "UNKNOWN"
 
-    def _notify(self, level: str, message: str, market: Optional[str] = None, outcome: Optional[str] = None, prediction_id: Optional[str] = None) -> None:
+    def _is_auth_error_text(self, message: str) -> bool:
+        low = str(message or "").lower()
+        return (
+            ("http 401" in low)
+            or ("http 403" in low)
+            or ("permission_denied" in low)
+            or ("unauthenticated" in low)
+            or ("api key was reported as leaked" in low)
+            or ("invalid api key" in low)
+            or ("auth/permission error" in low)
+            or ("update gemini_api_key" in low)
+            or (("api key" in low or "gemini_api_key" in low) and ("invalid" in low or "leaked" in low))
+            or (("api key" in low) and ("forbidden" in low))
+        )
+
+    def _normalize_research_error(self, message: str) -> str:
+        txt = _trim_text(message, max_len=320)
+        if self._is_auth_error_text(txt):
+            return "LLM auth/permission error. Update GEMINI_API_KEY (old key appears invalid or leaked)."
+        return txt
+
+    def _notify(
+        self,
+        level: str,
+        message: str,
+        market: Optional[str] = None,
+        outcome: Optional[str] = None,
+        prediction_id: Optional[str] = None,
+        dedupe_window_sec: int = 0,
+    ) -> None:
+        ts_now = _now_ts()
+        dedupe_for = max(0, int(dedupe_window_sec or 0))
+        sig = f"{str(level)}|{str(market)}|{str(outcome)}|{str(prediction_id)}|{str(message)}"
+        if dedupe_for > 0:
+            with self._lock:
+                last = int(self._notify_recent.get(sig) or 0)
+                if ts_now - last < dedupe_for:
+                    return
+                self._notify_recent[sig] = ts_now
+                if len(self._notify_recent) > 2000:
+                    cutoff = ts_now - 86400
+                    self._notify_recent = {k: v for k, v in self._notify_recent.items() if int(v) >= cutoff}
         row = {
-            "ts": _now_ts(),
+            "ts": ts_now,
             "level": level,
             "market": market,
             "outcome": outcome,
             "prediction_id": prediction_id,
             "message": message,
         }
-        self.notifications.append(row)
-        self._append_jsonl(self.notifications_log, row)
+        with self._lock:
+            self.notifications.append(row)
+            self._append_jsonl(self.notifications_log, row)
 
     def _extract_task_topic(self, task: Dict[str, Any]) -> str:
         topic = str(task.get("topic") or "").strip()
@@ -739,7 +788,8 @@ class HeroAssistantEngine:
         out = maybe_generate_with_openai(prompt, context)
         if not isinstance(out, str) or not out.strip():
             llm = get_last_llm_status()
-            raise RuntimeError(str(llm.get("error") or "model_unavailable"))
+            err_txt = self._normalize_research_error(str(llm.get("error") or "model_unavailable"))
+            raise RuntimeError(err_txt)
         payload = self._coerce_research_payload(out, topic=topic)
         if not isinstance(payload, dict):
             payload = {"knowledge": [], "news": []}
@@ -789,15 +839,43 @@ class HeroAssistantEngine:
 
     def _auto_research_loop(self) -> None:
         while True:
+            now = _now_ts()
+            if int(self.research_pause_until_ts or 0) > now:
+                time.sleep(min(30, int(self.research_pause_until_ts - now)))
+                continue
             try:
                 self._auto_research_once()
+                with self._lock:
+                    self.research_pause_until_ts = 0
             except Exception as e:
+                err_txt = self._normalize_research_error(str(e))
+                is_auth = self._is_auth_error_text(str(e)) or self._is_auth_error_text(err_txt)
                 with self._lock:
                     self.last_research_ts = _now_ts()
-                    self.last_research_status = "error"
-                    self.last_research_error = _trim_text(str(e), max_len=240)
+                    self.last_research_status = "blocked_auth" if is_auth else "error"
+                    self.last_research_error = _trim_text(err_txt, max_len=240)
+                    if is_auth:
+                        self.research_pause_until_ts = max(
+                            int(self.research_pause_until_ts or 0),
+                            _now_ts() + self.research_auth_backoff_sec,
+                        )
                     self._save_state()
-                self._notify("warn", f"Auto research error: {self.last_research_error}")
+                if is_auth:
+                    pause_until = datetime.fromtimestamp(int(self.research_pause_until_ts), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+                    self._notify(
+                        "warn",
+                        f"Auto research paused: {self.last_research_error} Next retry after {pause_until}.",
+                        dedupe_window_sec=self.research_auth_backoff_sec,
+                    )
+                    time.sleep(min(self.research_interval_sec, 30))
+                    continue
+                self._notify(
+                    "warn",
+                    f"Auto research error: {self.last_research_error}",
+                    dedupe_window_sec=self.research_error_notify_cooldown_sec,
+                )
+                time.sleep(self.research_transient_backoff_sec)
+                continue
             time.sleep(self.research_interval_sec)
 
     # ---------------- ingestion ----------------
@@ -1194,6 +1272,7 @@ class HeroAssistantEngine:
                     "last_ts": int(self.last_research_ts or 0),
                     "last_status": str(self.last_research_status or "idle"),
                     "last_error": str(self.last_research_error or ""),
+                    "pause_until_ts": int(self.research_pause_until_ts or 0),
                     "cycles": int(self.total_research_cycles or 0),
                 },
                 "chat_history_size": len(self.chat_history),
@@ -1337,11 +1416,13 @@ class HeroAssistantEngine:
                 st = self.stats_snapshot()
                 rs = st.get("research") or {}
                 last_ts = int(rs.get("last_ts") or 0)
+                pause_ts = int(rs.get("pause_until_ts") or 0)
                 last_txt = datetime.fromtimestamp(last_ts, tz=timezone.utc).isoformat() if last_ts > 0 else "never"
+                pause_txt = datetime.fromtimestamp(pause_ts, tz=timezone.utc).isoformat() if pause_ts > 0 else "none"
                 return done(
                     f"Auto research: enabled={rs.get('enabled')}, interval={rs.get('interval_sec')}s, "
                     f"last_status={rs.get('last_status')}, cycles={rs.get('cycles')}, "
-                    f"last_update={last_txt}."
+                    f"last_update={last_txt}, paused_until={pause_txt}."
                 )
 
             if m in ("run research now", "refresh news", "refresh knowledge"):
@@ -1350,6 +1431,14 @@ class HeroAssistantEngine:
                     return done("Auto research run completed.")
                 except Exception as e:
                     return done(f"Auto research run failed: {str(e)}")
+
+            if m in ("resume research", "resume auto research", "unpause research"):
+                with self._lock:
+                    self.research_pause_until_ts = 0
+                    self.last_research_status = "idle"
+                    self.last_research_error = ""
+                    self._save_state()
+                return done("Auto research resumed. I will run on the next cycle.")
 
             if m in ("tasks", "show tasks", "task status"):
                 if not self.tasks:

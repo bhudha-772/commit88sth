@@ -528,8 +528,12 @@
         const newsN = Number(st.news_items_count || 0);
         const rs = st.research || {};
         const llm = st.llm || {};
-        const llmTxt = llm.ok ? `LLM ${llm.provider || ""} ok` : `LLM err: ${llm.error || "unknown"}`;
-        mem.textContent = `Memory ${usedN}/${capN} (${used}% used | ${left}% left) | Learned ${learnedN} | News ${newsN} | Research ${rs.last_status || "idle"} | ${llmTxt}`;
+        const llmErr = String(llm.error || "unknown");
+        const llmErrShort = llmErr.length > 120 ? `${llmErr.slice(0, 120)}...` : llmErr;
+        const llmTxt = llm.ok ? `LLM ${llm.provider || ""} ok` : `LLM err: ${llmErrShort}`;
+        const paused = Number(rs.pause_until_ts || 0) > Math.floor(Date.now() / 1000);
+        const researchTxt = `${rs.last_status || "idle"}${paused ? " (paused)" : ""}`;
+        mem.textContent = `Memory ${usedN}/${capN} (${used}% used | ${left}% left) | Learned ${learnedN} | News ${newsN} | Research ${researchTxt} | ${llmTxt}`;
       }
     } else {
       setOnline(false);

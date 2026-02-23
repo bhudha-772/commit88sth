@@ -15,9 +15,8 @@ import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 
-# Prototype default key (user-requested hardcoded mode).
-# Rotate before production usage.
-DEFAULT_GEMINI_API_KEY = "AIzaSyAjONo9WV8iH3fLPHm0uYOw4f_isiNAM2A"
+# Do not hardcode production keys in source.
+DEFAULT_GEMINI_API_KEY = ""
 DEFAULT_GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
 
 _LAST_LLM_STATUS: Dict[str, Any] = {"provider": None, "model": None, "ok": False, "error": "not_called", "ts": 0}
@@ -150,6 +149,8 @@ def _discover_gemini_models(api_key: str, base_root: str) -> List[str]:
     for ver in ("v1beta", "v1"):
         url = f"{base_root}/{ver}/models?key={urllib.parse.quote(api_key)}"
         obj, _err = _get_json(url, headers={"Accept": "application/json"})
+        if _is_auth_or_permission_error(_err or ""):
+            return []
         if not isinstance(obj, dict):
             continue
         arr = obj.get("models")
@@ -195,6 +196,19 @@ def _model_short_name(model_name: str) -> str:
 def _should_try_next_model(err: str) -> bool:
     e = (err or "").lower()
     return ("not found" in e) or ("404" in e) or ("not supported" in e)
+
+
+def _is_auth_or_permission_error(err: str) -> bool:
+    e = (err or "").lower()
+    return (
+        ("http 401" in e)
+        or ("http 403" in e)
+        or ("permission_denied" in e)
+        or ("unauthenticated" in e)
+        or ("invalid api key" in e)
+        or ("api key was reported as leaked" in e)
+        or (("api key" in e) and ("forbidden" in e))
+    )
 
 
 def _call_openai(user_message: str, context: Dict[str, Any]) -> Optional[str]:
@@ -319,6 +333,9 @@ def _call_gemini(user_message: str, context: Dict[str, Any]) -> Optional[str]:
                     err = err2 or err
                 last_err = err or "no_response"
                 attempts.append(f"{short}@{ver}:{(last_err or 'error')[:70]}")
+                if _is_auth_or_permission_error(last_err):
+                    _set_status("gemini", f"{short}@{ver}", False, last_err)
+                    return None
                 if _should_try_next_model(last_err):
                     break
                 continue
