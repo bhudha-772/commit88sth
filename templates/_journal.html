@@ -195,6 +195,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // CONFIG: set SHOW_POSTED=false to record only final results (recommended).
   // Set to true only for debugging if you want the amber POSTED rows.
   const SHOW_POSTED = false;
+  const VERBOSE_SSE_CONSOLE = false;
 
   const ROLLING_COUNT = 10;
   const SESSION_CAP = 300;
@@ -227,11 +228,13 @@ document.addEventListener('DOMContentLoaded', () => {
       lastRawEvents.unshift(item);
       if (lastRawEvents.length > MAX_DEBUG) lastRawEvents.length = MAX_DEBUG;
       renderDebug();
-      console.groupCollapsed && console.groupCollapsed('Journal SSE event (parsed)');
-      console.log('note:', note);
-      console.log('raw:', payload);
-      console.log('extracted:', extracted);
-      console.groupEnd && console.groupEnd();
+      if (VERBOSE_SSE_CONSOLE) {
+        console.groupCollapsed && console.groupCollapsed('Journal SSE event (parsed)');
+        console.log('note:', note);
+        console.log('raw:', payload);
+        console.log('extracted:', extracted);
+        console.groupEnd && console.groupEnd();
+      }
     } catch (e) { console.error('debug add err', e); }
   }
   function renderDebug() {
@@ -521,7 +524,6 @@ document.addEventListener('DOMContentLoaded', () => {
       result: top.result || top.outcome || top.status || null,
       observed_ticks: top.observed_ticks || top.observed || top.tick_stream || []
     };
-    addDebugEvent(payload, extracted, `incoming-event=${incomingEventName||'(none)'} `);
 
     const ae = (top.analysis_event || top.event || top.type || '').toString();
     const resultVal = (top.result || top.outcome || '').toString().toUpperCase();

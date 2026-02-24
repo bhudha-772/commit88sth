@@ -18,7 +18,7 @@ import socket
 import traceback
 import sys
 import shlex
-from collections import deque, defaultdict
+from collections import Counter, deque, defaultdict
 from datetime import datetime, timezone
 from typing import Deque, Any, List, Optional, Dict
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
@@ -338,6 +338,10 @@ def _safe_digit(v):
     if 0 <= n <= 9:
         return n
     return None
+
+
+def _truthy(v: Any) -> bool:
+    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _clean_price_text(v):
@@ -1795,6 +1799,431 @@ def control_prediction_stats():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+class OUStrategyEngine:
+    """
+    In-process Over/Under research engine focused on:
+    - OVER 0 (DIGITOVER barrier 0)
+    - OVER 1 (DIGITOVER barrier 1)
+    - UNDER 9 (DIGITUNDER barrier 9)
+    - UNDER 8 (DIGITUNDER barrier 8)
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self.settings_file = os.path.join(LOG_DIR, "ou_strategy_settings.json")
+
+        self.enabled = _truthy(os.environ.get("HERO_OU_ENABLED", "1"))
+        self.auto_predict = _truthy(os.environ.get("HERO_OU_AUTO_PREDICT", "1"))
+        self.window_size = max(200, int(os.environ.get("HERO_OU_WINDOW_SIZE", "5000")))
+        self.min_samples = max(100, int(os.environ.get("HERO_OU_MIN_SAMPLES", "1200")))
+        self.delta = max(0.0, float(os.environ.get("HERO_OU_DELTA", "0.002")))
+        self.z_score = max(0.0, float(os.environ.get("HERO_OU_Z", "1.96")))
+        self.analyze_interval_sec = max(0.2, float(os.environ.get("HERO_OU_ANALYZE_INTERVAL_SEC", "1.0")))
+        self.predict_cooldown_sec = max(1.0, float(os.environ.get("HERO_OU_PREDICT_COOLDOWN_SEC", "12.0")))
+        self.max_signal_history = max(20, int(os.environ.get("HERO_OU_SIGNAL_HISTORY_MAX", "300")))
+
+        focus_env = os.environ.get(
+            "HERO_OU_FOCUS_SYMBOLS",
+            "1HZ10V,1HZ25V,1HZ50V,1HZ75V,1HZ100V,R_10,R_25,R_50,R_75,R_100",
+        )
+        self.focus_symbols = self._parse_focus_symbols(focus_env)
+
+        # Total return multipliers (stake-inclusive). Can be adjusted at runtime.
+        self.total_return = {
+            "OVER_0": max(1.0, float(os.environ.get("HERO_OU_RETURN_OVER_0", "1.0989"))),
+            "UNDER_9": max(1.0, float(os.environ.get("HERO_OU_RETURN_UNDER_9", "1.0989"))),
+            "OVER_1": max(1.0, float(os.environ.get("HERO_OU_RETURN_OVER_1", "1.2346"))),
+            "UNDER_8": max(1.0, float(os.environ.get("HERO_OU_RETURN_UNDER_8", "1.2346"))),
+        }
+
+        self.buffers: Dict[str, Deque[int]] = defaultdict(lambda: deque(maxlen=self.window_size))
+        self.last_analysis_ts: Dict[str, float] = {}
+        self.last_prediction_ts: Dict[str, float] = {}
+        self.latest_by_symbol: Dict[str, Dict[str, Any]] = {}
+        self.signals: Deque[Dict[str, Any]] = deque(maxlen=self.max_signal_history)
+
+        self.total_ticks = 0
+        self.total_analyses = 0
+        self.total_signals = 0
+
+        self._load_settings()
+        _log(
+            "OU engine initialized "
+            f"(enabled={self.enabled} auto_predict={self.auto_predict} window={self.window_size} "
+            f"min_samples={self.min_samples} focus_symbols={len(self.focus_symbols) if self.focus_symbols else 'ALL'})"
+        )
+
+    def _parse_focus_symbols(self, raw: Any) -> set:
+        if raw is None:
+            return set()
+        if isinstance(raw, (list, tuple, set)):
+            parts = [str(x or "").strip().upper() for x in raw]
+        else:
+            txt = str(raw or "").replace("|", ",")
+            parts = [x.strip().upper() for x in txt.split(",")]
+        return {x for x in parts if x}
+
+    def _resize_buffers_locked(self, new_window_size: int) -> None:
+        old_items = {k: list(v) for k, v in self.buffers.items()}
+        self.window_size = max(200, int(new_window_size))
+        self.buffers = defaultdict(lambda: deque(maxlen=self.window_size))
+        for sym, arr in old_items.items():
+            self.buffers[sym] = deque(arr[-self.window_size :], maxlen=self.window_size)
+
+    def _load_settings(self) -> None:
+        try:
+            if not os.path.exists(self.settings_file):
+                return
+            with open(self.settings_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                return
+            self.apply_settings(data, persist=False)
+            _log("OU engine settings loaded from disk")
+        except Exception as e:
+            _err(f"OU load settings failed: {e}")
+
+    def _save_settings(self) -> None:
+        try:
+            payload = self.settings_snapshot(include_runtime=False)
+            with open(self.settings_file, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=True)
+        except Exception as e:
+            _err(f"OU save settings failed: {e}")
+
+    def _candidate_rows(self, counts: Counter, n: int) -> List[Dict[str, Any]]:
+        if n <= 0:
+            return []
+        c0 = int(counts.get(0, 0))
+        c1 = int(counts.get(1, 0))
+        c8 = int(counts.get(8, 0))
+        c9 = int(counts.get(9, 0))
+
+        defs = [
+            ("OVER_0", "DIGITOVER", "0", max(0, n - c0)),
+            ("UNDER_9", "DIGITUNDER", "9", max(0, n - c9)),
+            ("OVER_1", "DIGITOVER", "1", max(0, n - c0 - c1)),
+            ("UNDER_8", "DIGITUNDER", "8", max(0, n - c8 - c9)),
+        ]
+        out: List[Dict[str, Any]] = []
+        for name, ctype, barrier, wins in defs:
+            p_hat = float(wins) / float(n)
+            total_return = float(self.total_return.get(name) or 1.0)
+            p_be = (1.0 / total_return) if total_return > 0 else 1.0
+            se = math.sqrt(max(0.0, p_hat * (1.0 - p_hat) / float(n)))
+            lower = max(0.0, p_hat - self.z_score * se)
+            ev = (p_hat * total_return) - 1.0
+            pass_edge = (
+                n >= self.min_samples
+                and p_hat >= (p_be + self.delta)
+                and lower >= p_be
+                and ev > 0.0
+            )
+            out.append(
+                {
+                    "name": name,
+                    "contract_type": ctype,
+                    "barrier": barrier,
+                    "wins": int(wins),
+                    "samples": int(n),
+                    "p_hat": round(p_hat, 6),
+                    "p_be": round(p_be, 6),
+                    "se": round(se, 6),
+                    "lower_ci95": round(lower, 6),
+                    "ev_per_stake": round(ev, 6),
+                    "pass_edge": bool(pass_edge),
+                    "total_return": round(total_return, 6),
+                }
+            )
+        out.sort(key=lambda x: (x.get("pass_edge"), x.get("ev_per_stake", -9.0), x.get("lower_ci95", 0.0)), reverse=True)
+        return out
+
+    def _build_symbol_snapshot(self, symbol: str, epoch: int, digits: List[int]) -> Dict[str, Any]:
+        n = len(digits)
+        counts = Counter(digits)
+        rows = self._candidate_rows(counts, n)
+        best = rows[0] if rows else None
+        return {
+            "ts": int(time.time()),
+            "epoch": int(epoch or 0),
+            "symbol": str(symbol or "").upper(),
+            "samples": int(n),
+            "eligible": bool(n >= self.min_samples),
+            "best": best,
+            "candidates": rows,
+            "counts": {str(k): int(v) for k, v in sorted(counts.items())},
+        }
+
+    def _signal_row_from_snapshot(self, snapshot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        try:
+            best = snapshot.get("best") or {}
+            if not best.get("pass_edge"):
+                return None
+            return {
+                "ts": int(time.time()),
+                "epoch": int(snapshot.get("epoch") or 0),
+                "symbol": str(snapshot.get("symbol") or "").upper(),
+                "contract": str(best.get("name") or ""),
+                "contract_type": str(best.get("contract_type") or ""),
+                "barrier": str(best.get("barrier") or ""),
+                "samples": int(best.get("samples") or snapshot.get("samples") or 0),
+                "p_hat": float(best.get("p_hat") or 0.0),
+                "p_be": float(best.get("p_be") or 0.0),
+                "lower_ci95": float(best.get("lower_ci95") or 0.0),
+                "ev_per_stake": float(best.get("ev_per_stake") or 0.0),
+            }
+        except Exception:
+            return None
+
+    def _emit_signal(self, signal_row: Dict[str, Any]) -> None:
+        sym = str(signal_row.get("symbol") or "").upper()
+        now = time.time()
+        with self._lock:
+            if (now - float(self.last_prediction_ts.get(sym) or 0.0)) < float(self.predict_cooldown_sec):
+                return
+            self.last_prediction_ts[sym] = now
+
+        contract = str(signal_row.get("contract") or "")
+        ctype = str(signal_row.get("contract_type") or "")
+        barrier = str(signal_row.get("barrier") or "")
+        direction = "over" if ctype == "DIGITOVER" else "under"
+        prediction_payload = {
+            "symbol": sym,
+            "prediction_digit": int(barrier) if barrier.isdigit() else None,
+            "prediction_mode": "ou_focus",
+            "contract_type": ctype,
+            "barrier": barrier,
+            "ou_contract": contract,
+            "ou_direction": direction,
+            "confidence": float(signal_row.get("p_hat") or 0.0),
+            "message": (
+                f"OU signal {contract} on {sym}: p={signal_row.get('p_hat'):.4f}, "
+                f"p_be={signal_row.get('p_be'):.4f}, ev={signal_row.get('ev_per_stake'):.4f}"
+            ),
+            "raw": {"ou_signal": signal_row},
+        }
+        res = add_prediction_log(prediction_payload)
+        signal_row["prediction_id"] = res.get("prediction_id") if isinstance(res, dict) else None
+        signal_row["status"] = "posted" if isinstance(res, dict) and res.get("ok") else "error"
+        signal_row["error"] = None if signal_row["status"] == "posted" else (res.get("error") if isinstance(res, dict) else "unknown")
+
+        with self._lock:
+            self.total_signals += 1
+            self.signals.appendleft(dict(signal_row))
+
+        try:
+            _broadcast_analysis({"analysis_event": "ou_signal", "signal": signal_row})
+        except Exception:
+            pass
+
+    def ingest_tick(self, symbol: str, last_decimal: Any, epoch: int) -> None:
+        sym = str(symbol or "").strip().upper()
+        if not sym:
+            return
+        d = _safe_digit(last_decimal)
+        if d is None:
+            return
+
+        now = time.time()
+        with self._lock:
+            self.total_ticks += 1
+            if self.focus_symbols and sym not in self.focus_symbols:
+                return
+
+            self.buffers[sym].append(int(d))
+            if not self.enabled:
+                return
+            last_ts = float(self.last_analysis_ts.get(sym) or 0.0)
+            if (now - last_ts) < float(self.analyze_interval_sec):
+                return
+            self.last_analysis_ts[sym] = now
+            digits = list(self.buffers[sym])
+
+        snapshot = self._build_symbol_snapshot(sym, int(epoch or now), digits)
+        signal = self._signal_row_from_snapshot(snapshot)
+        with self._lock:
+            self.latest_by_symbol[sym] = snapshot
+            self.total_analyses += 1
+
+        try:
+            _broadcast_analysis(
+                {
+                    "analysis_event": "ou_analysis",
+                    "symbol": sym,
+                    "samples": snapshot.get("samples"),
+                    "eligible": snapshot.get("eligible"),
+                    "best": snapshot.get("best"),
+                    "counts": snapshot.get("counts"),
+                }
+            )
+        except Exception:
+            pass
+
+        if self.auto_predict and signal:
+            self._emit_signal(signal)
+
+    def settings_snapshot(self, include_runtime: bool = True) -> Dict[str, Any]:
+        with self._lock:
+            out = {
+                "enabled": bool(self.enabled),
+                "auto_predict": bool(self.auto_predict),
+                "window_size": int(self.window_size),
+                "min_samples": int(self.min_samples),
+                "delta": float(self.delta),
+                "z_score": float(self.z_score),
+                "analyze_interval_sec": float(self.analyze_interval_sec),
+                "predict_cooldown_sec": float(self.predict_cooldown_sec),
+                "focus_symbols": sorted(list(self.focus_symbols)),
+                "total_return": dict(self.total_return),
+            }
+            if include_runtime:
+                out.update(
+                    {
+                        "total_ticks": int(self.total_ticks),
+                        "total_analyses": int(self.total_analyses),
+                        "total_signals": int(self.total_signals),
+                    }
+                )
+            return out
+
+    def status_snapshot(self, limit_symbols: int = 12, limit_signals: int = 30) -> Dict[str, Any]:
+        with self._lock:
+            sym_rows = sorted(
+                list(self.latest_by_symbol.values()),
+                key=lambda x: int(x.get("ts") or 0),
+                reverse=True,
+            )[: max(1, int(limit_symbols))]
+            sig_rows = list(self.signals)[: max(1, int(limit_signals))]
+        return {
+            "engine": "ou_focus",
+            "settings": self.settings_snapshot(include_runtime=True),
+            "symbols": sym_rows,
+            "signals": sig_rows,
+        }
+
+    def apply_settings(self, obj: Dict[str, Any], persist: bool = True) -> Dict[str, Any]:
+        if not isinstance(obj, dict):
+            return self.settings_snapshot(include_runtime=True)
+
+        with self._lock:
+            if "enabled" in obj:
+                v = obj.get("enabled")
+                self.enabled = v if isinstance(v, bool) else _truthy(v)
+            if "auto_predict" in obj:
+                v = obj.get("auto_predict")
+                self.auto_predict = v if isinstance(v, bool) else _truthy(v)
+            if "window_size" in obj:
+                try:
+                    new_window = max(200, int(obj.get("window_size")))
+                    if new_window != self.window_size:
+                        self._resize_buffers_locked(new_window)
+                except Exception:
+                    pass
+            if "min_samples" in obj:
+                try:
+                    self.min_samples = max(100, int(obj.get("min_samples")))
+                except Exception:
+                    pass
+            if "delta" in obj:
+                try:
+                    self.delta = max(0.0, float(obj.get("delta")))
+                except Exception:
+                    pass
+            if "z_score" in obj:
+                try:
+                    self.z_score = max(0.0, float(obj.get("z_score")))
+                except Exception:
+                    pass
+            if "analyze_interval_sec" in obj:
+                try:
+                    self.analyze_interval_sec = max(0.2, float(obj.get("analyze_interval_sec")))
+                except Exception:
+                    pass
+            if "predict_cooldown_sec" in obj:
+                try:
+                    self.predict_cooldown_sec = max(1.0, float(obj.get("predict_cooldown_sec")))
+                except Exception:
+                    pass
+            if "focus_symbols" in obj:
+                self.focus_symbols = self._parse_focus_symbols(obj.get("focus_symbols"))
+            if "total_return" in obj and isinstance(obj.get("total_return"), dict):
+                for k in ("OVER_0", "UNDER_9", "OVER_1", "UNDER_8"):
+                    if k in obj["total_return"]:
+                        try:
+                            self.total_return[k] = max(1.0, float(obj["total_return"][k]))
+                        except Exception:
+                            pass
+            if obj.get("reset_runtime"):
+                self.latest_by_symbol = {}
+                self.signals = deque(maxlen=self.max_signal_history)
+                self.last_analysis_ts = {}
+                self.last_prediction_ts = {}
+                self.total_ticks = 0
+                self.total_analyses = 0
+                self.total_signals = 0
+                self.buffers = defaultdict(lambda: deque(maxlen=self.window_size))
+
+        if persist:
+            self._save_settings()
+        snap = self.status_snapshot()
+        try:
+            _broadcast_analysis({"analysis_event": "ou_status", "ou": snap})
+        except Exception:
+            pass
+        return snap
+
+
+OU_ENGINE = OUStrategyEngine()
+
+
+@app.route("/control/ou_status", methods=["GET"])
+def control_ou_status():
+    try:
+        lim_s = int(request.args.get("symbols", "12"))
+    except Exception:
+        lim_s = 12
+    try:
+        lim_sig = int(request.args.get("signals", "30"))
+    except Exception:
+        lim_sig = 30
+    try:
+        return jsonify({"ok": True, "ou": OU_ENGINE.status_snapshot(limit_symbols=lim_s, limit_signals=lim_sig)})
+    except Exception as e:
+        _err(f"control_ou_status error: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/control/ou_settings", methods=["POST"])
+def control_ou_settings():
+    try:
+        obj = request.get_json(force=True)
+    except Exception as e:
+        _err(f"control_ou_settings invalid json: {e}")
+        return jsonify({"ok": False, "error": "invalid json"}), 400
+    if not isinstance(obj, dict):
+        return jsonify({"ok": False, "error": "expected object"}), 400
+    try:
+        snap = OU_ENGINE.apply_settings(obj, persist=True)
+        return jsonify({"ok": True, "ou": snap})
+    except Exception as e:
+        _err(f"control_ou_settings error: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/control/ou_signals", methods=["GET"])
+def control_ou_signals():
+    try:
+        lim_sig = int(request.args.get("limit", "50"))
+    except Exception:
+        lim_sig = 50
+    try:
+        snap = OU_ENGINE.status_snapshot(limit_symbols=1, limit_signals=lim_sig)
+        return jsonify({"ok": True, "signals": snap.get("signals") or []})
+    except Exception as e:
+        _err(f"control_ou_signals error: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 
 
 # ---------- endpoints ----------
@@ -2788,6 +3217,12 @@ def push_tick():
             _last_tick_time = time.time()
     except Exception:
         pass
+
+    # Run in-process Over/Under focused analysis.
+    try:
+        OU_ENGINE.ingest_tick(payload.get("symbol"), payload.get("last_decimal"), int(epoch or 0))
+    except Exception as e:
+        _err(f"OU ingest_tick failed: {e}")
 
     # broadcast tick (payload now includes seq and enriched reason/indicators)
     _broadcast_tick(_enrich_tick_payload(payload))

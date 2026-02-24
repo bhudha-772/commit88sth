@@ -15,8 +15,11 @@ import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 
-# Do not hardcode production keys in source.
-DEFAULT_GEMINI_API_KEY = ""
+# Persistent key ring fallback (used when env/file keys are not provided).
+DEFAULT_GEMINI_KEYS = [
+    "AIzaSyAZl7E_UK-rzFi4Bkv4VfrnnmQiF_wjiuw",
+    "AIzaSyAxwKQZWvPc1xuMcMMEfFqgUBpN1qxzJw4",
+]
 DEFAULT_GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
 
 _LAST_LLM_STATUS: Dict[str, Any] = {"provider": None, "model": None, "ok": False, "error": "not_called", "ts": 0}
@@ -40,6 +43,67 @@ def _set_status(provider: str, model: Optional[str], ok: bool, error: Optional[s
 
 def _truthy(v: Any) -> bool:
     return str(v or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _split_and_clean_csv(v: str) -> List[str]:
+    out: List[str] = []
+    for x in str(v or "").split(","):
+        s = str(x or "").strip()
+        if s:
+            out.append(s)
+    return out
+
+
+def _gemini_keys_file_path() -> str:
+    return os.path.expanduser(os.environ.get("HERO_ASSISTANT_GEMINI_KEYS_FILE", "~/.hero_logs/gemini_keys.json"))
+
+
+def _load_gemini_keys_from_file(path: str) -> List[str]:
+    try:
+        if not path or not os.path.exists(path):
+            return []
+        with open(path, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+        if isinstance(obj, dict):
+            keys = obj.get("keys")
+            if isinstance(keys, list):
+                return [str(k).strip() for k in keys if str(k).strip()]
+            single = obj.get("gemini_api_key")
+            if isinstance(single, str) and single.strip():
+                return [single.strip()]
+        if isinstance(obj, list):
+            return [str(k).strip() for k in obj if str(k).strip()]
+    except Exception:
+        return []
+    return []
+
+
+def _gemini_api_keys() -> List[str]:
+    out: List[str] = []
+    seen = set()
+
+    def _add_many(rows: List[str]) -> None:
+        for k in rows:
+            kk = str(k or "").strip()
+            if not kk:
+                continue
+            lk = kk.lower()
+            if lk in seen:
+                continue
+            seen.add(lk)
+            out.append(kk)
+
+    # Highest priority: explicit multi-key env
+    _add_many(_split_and_clean_csv(os.environ.get("HERO_ASSISTANT_GEMINI_KEYS") or ""))
+    # Next: standard single-key env
+    env_single = (os.environ.get("GEMINI_API_KEY") or "").strip()
+    if env_single:
+        _add_many([env_single])
+    # Next: persisted local keys file
+    _add_many(_load_gemini_keys_from_file(_gemini_keys_file_path()))
+    # Fallback: in-code key ring
+    _add_many(DEFAULT_GEMINI_KEYS)
+    return out
 
 
 def _compact_context(context: Dict[str, Any], max_len: int = 16000) -> str:
@@ -211,6 +275,17 @@ def _is_auth_or_permission_error(err: str) -> bool:
     )
 
 
+def _is_quota_or_rate_error(err: str) -> bool:
+    e = (err or "").lower()
+    return (
+        ("http 429" in e)
+        or ("resource_exhausted" in e)
+        or ("rate limit" in e)
+        or ("quota" in e)
+        or ("too many requests" in e)
+    )
+
+
 def _call_openai(user_message: str, context: Dict[str, Any]) -> Optional[str]:
     api_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
     if not api_key:
@@ -285,8 +360,8 @@ def _gemini_models(api_key: str, base_root: str) -> List[str]:
 
 
 def _call_gemini(user_message: str, context: Dict[str, Any]) -> Optional[str]:
-    api_key = (os.environ.get("GEMINI_API_KEY") or DEFAULT_GEMINI_API_KEY).strip()
-    if not api_key:
+    api_keys = _gemini_api_keys()
+    if not api_keys:
         _set_status("gemini", None, False, "missing_api_key")
         return None
 
@@ -310,46 +385,58 @@ def _call_gemini(user_message: str, context: Dict[str, Any]) -> Optional[str]:
 
     attempts: List[str] = []
     last_err: Optional[str] = None
-    models = _gemini_models(api_key, base_root)
     versions = _gemini_api_versions()
 
-    for model in models:
-        short = _model_short_name(model)
-        for ver in versions:
-            endpoint = f"{base_root}/{ver}/{_as_model_path(model)}:generateContent?key={urllib.parse.quote(api_key)}"
-            raw, err = _post_json(endpoint, body, headers={"Content-Type": "application/json", "x-goog-api-key": api_key})
-            if not raw:
-                # Retry same model/version without web tool if this API/version rejects tools payload.
-                low = (err or "").lower()
-                if allow_web and (("tools" in low) or ("google_search" in low) or ("unknown field" in low) or ("invalid argument" in low)):
-                    body_no_tools = dict(body)
-                    body_no_tools.pop("tools", None)
-                    raw2, err2 = _post_json(endpoint, body_no_tools, headers={"Content-Type": "application/json", "x-goog-api-key": api_key})
-                    if raw2:
-                        txt2 = _extract_gemini_text(raw2)
-                        if txt2:
-                            _set_status("gemini", f"{short}@{ver}", True, None)
-                            return txt2
-                    err = err2 or err
-                last_err = err or "no_response"
-                attempts.append(f"{short}@{ver}:{(last_err or 'error')[:70]}")
-                if _is_auth_or_permission_error(last_err):
-                    _set_status("gemini", f"{short}@{ver}", False, last_err)
-                    return None
-                if _should_try_next_model(last_err):
-                    break
-                continue
-            txt = _extract_gemini_text(raw)
-            if txt:
-                _set_status("gemini", f"{short}@{ver}", True, None)
-                return txt
-            last_err = "empty_text"
-            attempts.append(f"{short}@{ver}:empty_text")
+    for key_idx, api_key in enumerate(api_keys):
+        models = _gemini_models(api_key, base_root)
+        if not models:
+            last_err = "no_models"
+            attempts.append(f"k{key_idx+1}:no_models")
+            continue
+
+        switch_key = False
+        for model in models:
+            short = _model_short_name(model)
+            for ver in versions:
+                endpoint = f"{base_root}/{ver}/{_as_model_path(model)}:generateContent?key={urllib.parse.quote(api_key)}"
+                raw, err = _post_json(endpoint, body, headers={"Content-Type": "application/json", "x-goog-api-key": api_key})
+                if not raw:
+                    # Retry same model/version without web tool if this API/version rejects tools payload.
+                    low = (err or "").lower()
+                    if allow_web and (("tools" in low) or ("google_search" in low) or ("unknown field" in low) or ("invalid argument" in low)):
+                        body_no_tools = dict(body)
+                        body_no_tools.pop("tools", None)
+                        raw2, err2 = _post_json(endpoint, body_no_tools, headers={"Content-Type": "application/json", "x-goog-api-key": api_key})
+                        if raw2:
+                            txt2 = _extract_gemini_text(raw2)
+                            if txt2:
+                                _set_status("gemini", f"k{key_idx+1}:{short}@{ver}", True, None)
+                                return txt2
+                        err = err2 or err
+                    last_err = err or "no_response"
+                    attempts.append(f"k{key_idx+1}:{short}@{ver}:{(last_err or 'error')[:70]}")
+
+                    # Fast switch to next key for auth/quota failures.
+                    if _is_auth_or_permission_error(last_err) or _is_quota_or_rate_error(last_err):
+                        switch_key = True
+                        break
+                    if _should_try_next_model(last_err):
+                        break
+                    continue
+
+                txt = _extract_gemini_text(raw)
+                if txt:
+                    _set_status("gemini", f"k{key_idx+1}:{short}@{ver}", True, None)
+                    return txt
+                last_err = "empty_text"
+                attempts.append(f"k{key_idx+1}:{short}@{ver}:empty_text")
+            if switch_key:
+                break
 
     err_txt = (last_err or "failed")
     if attempts:
-        err_txt = f"{err_txt} | attempts: " + ", ".join(attempts[-4:])
-    _set_status("gemini", ",".join([_model_short_name(m) for m in models[:3]]), False, err_txt)
+        err_txt = f"{err_txt} | attempts: " + ", ".join(attempts[-6:])
+    _set_status("gemini", f"keys={len(api_keys)}", False, err_txt)
     return None
 
 

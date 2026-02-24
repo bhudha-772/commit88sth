@@ -56,7 +56,7 @@ POST_TIMEOUT = 9.0
 CALC_UPDATE_INTERVAL = 2.0
 MAX_WAIT_TICKS = int(os.environ.get("DIFFER_MAX_WAIT_TICKS", "10"))
 
-DEFAULT_CONF_THRESHOLD = float(os.environ.get("DIFFER_CONF_THRESHOLD", "0.70"))
+DEFAULT_CONF_THRESHOLD = float(os.environ.get("DIFFER_CONF_THRESHOLD", "0.00"))
 # keep these defs for compatibility but we'll enforce strict ">" checks instead of margins
 DEFAULT_TIE_MARGIN = float(os.environ.get("DIFFER_TIE_MARGIN", "0.03"))
 DEFAULT_STABILITY_TICKS = int(os.environ.get("DIFFER_STABILITY_TICKS", "2"))
@@ -80,6 +80,10 @@ RULES_PASS_THRESHOLD = float(os.environ.get("DIFFER_RULES_PASS_THRESHOLD", "0.3"
 MAX_CONF_DISPLAY = float(os.environ.get("DIFFER_MAX_CONF_DISPLAY", "0.995"))
 PENDING_TIMEOUT_SECS = int(os.environ.get("DIFFER_PENDING_TIMEOUT_SECS", "60"))
 MIN_INTERVAL_MARKET = int(os.environ.get("DIFFER_MIN_INTERVAL_MARKET", "15"))
+REQUIRE_UNIQUE_TOP = str(os.environ.get("DIFFER_REQUIRE_UNIQUE_TOP", "0")).strip().lower() in ("1", "true", "yes", "on")
+REQUIRE_UNIQUE_DIGIT = str(os.environ.get("DIFFER_REQUIRE_UNIQUE_DIGIT", "0")).strip().lower() in ("1", "true", "yes", "on")
+MIN_TOP_SPREAD = float(os.environ.get("DIFFER_MIN_TOP_SPREAD", "0.0"))
+MIN_DIGIT_SPREAD = float(os.environ.get("DIFFER_MIN_DIGIT_SPREAD", "0.0"))
 
 # toast interval (seconds) for "no predictions yet" notifications (rate-limited)
 TOAST_MIN_INTERVAL = float(os.environ.get("DIFFER_TOAST_MIN_INTERVAL", "10.0"))
@@ -936,7 +940,9 @@ def run_agent(
 
     log_info(
         f"agent starting; SSE={sse_url} analysis_push={analysis_push_url} "
-        f"prediction_push={prediction_push_url} buffer_size={buffer_size} min_buffer={min_buffer} max_wait_ticks={MAX_WAIT_TICKS}"
+        f"prediction_push={prediction_push_url} buffer_size={buffer_size} min_buffer={min_buffer} "
+        f"conf_threshold={conf_threshold} require_unique_top={REQUIRE_UNIQUE_TOP} require_unique_digit={REQUIRE_UNIQUE_DIGIT} "
+        f"min_top_spread={MIN_TOP_SPREAD} min_digit_spread={MIN_DIGIT_SPREAD} max_wait_ticks={MAX_WAIT_TICKS}"
     )
 
     # buffers per market
@@ -1014,14 +1020,40 @@ def run_agent(
             second = ranking[1] if len(ranking) > 1 else None
             top_conf = float(top.get("confidence", 0.0) or 0.0)
             second_conf = float(second.get("confidence", 0.0) or 0.0) if second else 0.0
+            market_spread = top_conf - second_conf
 
-            # require a clear unique top market — STRICT (no tie margins)
-            if not (top_conf > second_conf):
+            if top_conf < float(conf_threshold):
+                if (time.time() - last_toast_ts) > TOAST_MIN_INTERVAL:
+                    try:
+                        make_analysis_post(
+                            analysis_push_url,
+                            "prediction_toast",
+                            f"Top confidence too low ({top_conf:.3f} < {float(conf_threshold):.3f}); waiting.",
+                            symbol="SYSTEM",
+                            extra={"status": "low_confidence", "confidence": round(top_conf, 4), "threshold": float(conf_threshold)},
+                        )
+                        last_toast_ts = time.time()
+                    except Exception:
+                        pass
+                return
+
+            # market selection policy (strict/relaxed via env).
+            is_market_ok = False
+            if REQUIRE_UNIQUE_TOP:
+                is_market_ok = market_spread > max(0.0, float(MIN_TOP_SPREAD))
+            else:
+                is_market_ok = market_spread >= float(MIN_TOP_SPREAD)
+
+            if not is_market_ok:
                 if (time.time() - last_toast_ts) > TOAST_MIN_INTERVAL:
                     try:
                         make_analysis_post(analysis_push_url, "prediction_toast", "No clear top market yet.", symbol="SYSTEM", extra={"status": "none_yet"})
                         last_toast_ts = time.time()
-                        log_info(f"maybe_try_predict: top market not unique (top_conf={top_conf} second_conf={second_conf})")
+                        log_info(
+                            f"maybe_try_predict: top market gate blocked "
+                            f"(top_conf={top_conf} second_conf={second_conf} spread={market_spread:.6f} "
+                            f"require_unique={REQUIRE_UNIQUE_TOP} min_spread={MIN_TOP_SPREAD})"
+                        )
                     except Exception:
                         pass
                 return
@@ -1087,13 +1119,23 @@ def run_agent(
                         pass
                 return
 
-            # require unique top digit — STRICT (no tie margins)
-            if not (best_conf > second_digit_conf):
+            digit_spread = best_conf - second_digit_conf
+            is_digit_ok = False
+            if REQUIRE_UNIQUE_DIGIT:
+                is_digit_ok = digit_spread > max(0.0, float(MIN_DIGIT_SPREAD))
+            else:
+                is_digit_ok = digit_spread >= float(MIN_DIGIT_SPREAD)
+
+            if not is_digit_ok:
                 if (time.time() - last_toast_ts) > TOAST_MIN_INTERVAL:
                     try:
                         make_analysis_post(analysis_push_url, "prediction_toast", f"No clear top digit for {top_symbol}.", symbol="SYSTEM", extra={"status": "none_yet", "market": top_symbol})
                         last_toast_ts = time.time()
-                        log_info(f"maybe_try_predict: ambiguous top digit for {top_symbol} (best_conf={best_conf} second_conf={second_digit_conf})")
+                        log_info(
+                            f"maybe_try_predict: top digit gate blocked for {top_symbol} "
+                            f"(best_conf={best_conf} second_conf={second_digit_conf} spread={digit_spread:.6f} "
+                            f"require_unique={REQUIRE_UNIQUE_DIGIT} min_spread={MIN_DIGIT_SPREAD})"
+                        )
                     except Exception:
                         pass
                 return
