@@ -174,7 +174,11 @@
         </svg>
       </button>
 
-      <a href="/charts" style="margin-left:8px">Charts</a>
+      <div style="display:flex;align-items:center;gap:10px;margin-left:8px">
+        <a href="/charts">Charts</a>
+        <button id="btnOpenAnalysisPanel" class="btn" type="button">Analysis</button>
+        <button id="btnOpenOUPanel" class="btn" type="button">Digit OU</button>
+      </div>
     </header>
 
     <section id="marketGrid" class="market-grid" aria-live="polite"></section>
@@ -203,7 +207,7 @@
   </div>
 
   <!-- Overlay container with iframe for isolation -->
-  <div id="dashboardOverlay" class="overlay" aria-hidden="true" role="dialog">
+  <div id="dashboardOverlay" class="overlay" aria-hidden="true" inert role="dialog">
     <div class="inner" id="overlayInner" role="document" aria-label="Expanded Dashboard area">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <div id="overlayHeaderTitle" style="font-weight:800;font-size:16px">Market</div>
@@ -584,34 +588,6 @@
         });
 
       })();
-
-      // floating analysis icon (persistent access) — visible on load, single click handler
-      const analysisIcon = document.createElement('div');
-      analysisIcon.className = 'floating-action';
-      analysisIcon.title = 'Open Analysis';
-      analysisIcon.setAttribute('role', 'button');
-      analysisIcon.setAttribute('aria-label', 'Open Analysis Panel');
-      analysisIcon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="#0f172a" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 13v6"/><path d="M12 9v10"/><path d="M17 5v14"/></svg>';
-
-      // visible by default
-      analysisIcon.style.display = '';
-
-      // attach click handler once (ensure openAnalysisPanel exists later)
-      analysisIcon.addEventListener('click', function (ev) {
-        try {
-          if (typeof openAnalysisPanel === 'function') {
-            openAnalysisPanel();
-          } else {
-            const quick = document.getElementById('analysisQuickBtn');
-            if (quick) quick.style.display = '';
-          }
-        } catch (e) {
-          console.warn('analysisIcon click handler error', e);
-        }
-      });
-
-      document.body.appendChild(analysisIcon);
-
 
       // journal removed; keep only essential controls for modal chooser / SSE
       const chooserSelected = new Set();
@@ -1308,7 +1284,12 @@
         titleEl.textContent = market.label + ' — ' + market.code;
         try { overlayFrame.src = 'about:blank'; } catch(e){}
         overlay.classList.add('visible');
+        overlay.removeAttribute('inert');
         overlay.setAttribute('aria-hidden','false');
+        try {
+          const closeBtn = document.getElementById('closeOverlayBtn');
+          if (closeBtn) closeBtn.focus({ preventScroll: true });
+        } catch(e){}
 
         overlayFrame.onload = function(){
           try {
@@ -1454,27 +1435,36 @@
       }
 
       function openAnalysisPanel(){
-        // open overlay for analysis but do NOT hide the global analysis icon.
-        // The icon remains a persistent quick access control.
         openFullDashboard({ code: 'ANALYSIS', label: 'Analysis' });
-        // do NOT change analysisIcon.style.display here — keep it visible
       }
+      window.openAnalysisPanel = openAnalysisPanel;
 
       document.getElementById('closeOverlayBtn').addEventListener('click', closeOverlay);
       function closeOverlay(){
+        const focusTarget = document.getElementById('btnOpenAnalysisPanel') || document.getElementById('btnStartAnalysis') || document.getElementById('btnStartDeriv');
+        try {
+          if (document.activeElement && overlay.contains(document.activeElement) && document.activeElement.blur) {
+            document.activeElement.blur();
+          }
+          if (focusTarget && focusTarget.focus) {
+            focusTarget.focus({ preventScroll: true });
+          }
+        } catch(e){}
         overlay.classList.remove('visible');
+        overlay.setAttribute('inert', '');
         overlay.setAttribute('aria-hidden','true');
         overlaySymbol = null;
         try {
           overlayFrame.src = 'about:blank';
         } catch(e){}
-        // always ensure the analysis icon is visible when overlay is closed
-        try { analysisIcon.style.display = ''; } catch(e) {}
       }
 
-      analysisIcon.addEventListener('click', function(){
-        openAnalysisPanel();
-      });
+      const btnOpenAnalysisPanel = document.getElementById('btnOpenAnalysisPanel');
+      if (btnOpenAnalysisPanel) {
+        btnOpenAnalysisPanel.addEventListener('click', function(){
+          openAnalysisPanel();
+        });
+      }
 
       // start SSE
       attachSSE();

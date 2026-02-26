@@ -18,6 +18,7 @@ import socket
 import traceback
 import sys
 import shlex
+import importlib
 from collections import Counter, deque, defaultdict
 from datetime import datetime, timezone
 from typing import Deque, Any, List, Optional, Dict
@@ -42,6 +43,7 @@ except Exception:
     requests = None
 import urllib.request as _urllib_request
 import urllib.error as _urllib_error
+import urllib.parse as _urllib_parse
 import ssl as _ssl
 # --- end callback import ---
 
@@ -55,6 +57,8 @@ GLOBAL_DERIV_TOKENS = {"demo": None, "real": None}
 
 # server-side timestamp of last manual analysis stop (to avoid immediate restart races)
 GLOBAL_ANALYSIS_LAST_STOP_TS = 0.0
+GLOBAL_ANALYSIS_PROC = None
+GLOBAL_ANALYSIS_PROC_LOCK = threading.Lock()
 
 # server-side autotrade settings (mode -> settings)
 # Example shape: { "demo": {"stake": 1.0}, "real": {"stake": 0.35}, "default_mode": "demo" }
@@ -91,15 +95,13 @@ try:
     app.register_blueprint(higher_lower_trade.hl_bp)
     app.logger.info("Registered higher_lower_trade blueprint")
 except Exception as e:
-    # If _err helper exists you can use it; fallback to app.logger
-    try:
-        _err(f"Failed registering higher_lower_trade blueprint: {e}")
-    except Exception:
-        app.logger.exception("Failed registering higher_lower_trade blueprint")
+    # _err is defined later; keep this early path self-contained.
+    app.logger.exception("Failed registering higher_lower_trade blueprint: %s", e)
 
 
 # ---------- Token persistence (persist demo/real tokens so server restart doesn't lose them) ----------
 TOKEN_FILE = os.path.join(LOG_DIR, "hero_tokens.json")
+ANALYSIS_PID_FILE = os.path.join(LOG_DIR, "differs_agent.pid")
 
 def _mask_token(t):
     if not t:
@@ -200,7 +202,7 @@ def _check_admin_token(req):
 
 # --- robust import for HL trade daemon (non-fatal) ---
 try:
-    from higher_lower_trade_daemon import run_trade_daemon as run_trade_daemon  # preferred HL module
+    from higher_lower_trade_daemon import run_trade_daemon as run_trade_daemon  # type: ignore[reportMissingImports]
 except Exception as _e_hl:
     try:
         # fallback to differ implementation if HL module missing
@@ -213,6 +215,30 @@ except Exception as _e_hl:
             "No HL run_trade_daemon found (higher_lower_trade_daemon failed: %s; differ fallback failed: %s). HL daemon will not auto-start.",
             _e_hl, _e_diff
         )
+
+
+_trade_daemon_started = False
+_trade_daemon_lock = threading.Lock()
+
+
+def start_trade_daemon_once() -> bool:
+    global _trade_daemon_started
+    with _trade_daemon_lock:
+        if _trade_daemon_started:
+            return True
+        fn = run_trade_daemon
+        if not callable(fn):
+            _log("start_trade_daemon_once: run_trade_daemon unavailable; skipping")
+            return False
+        try:
+            t = threading.Thread(target=fn, name="hl_trade_daemon", daemon=True)
+            t.start()
+            _trade_daemon_started = True
+            _log("start_trade_daemon_once: started daemon thread")
+            return True
+        except Exception as e:
+            _err(f"start_trade_daemon_once failed: {e}")
+            return False
 
 
 # --- optional: integrate higher_lower_trade in-process (no extra files) ---
@@ -814,7 +840,7 @@ def _handle_settled_analysis(analysis_payload: dict):
         # prediction digit normalization
         pred_digit = None
         try:
-            pd = ap.get("prediction_digit") or ap.get("predicted") or ap.get("pred") or ap.get("digit")
+            pd = _first_present(ap, ["prediction_digit", "predicted", "pred", "digit"])
             if pd is not None:
                 pred_digit = int(pd)
         except Exception:
@@ -1177,6 +1203,194 @@ def _spawn_tmux_session(sess_name: str, cmd_shell: str) -> None:
             _log(f"_spawn_tmux_session: fallback Popen started for {sess_name} (pid={pop.pid})")
     except Exception as e:
         _err(f"_spawn_tmux_session fallback failed for {sess_name}: {e}")
+
+
+def _project_base_dir() -> str:
+    try:
+        return os.path.dirname(os.path.abspath(__file__))
+    except Exception:
+        return os.getcwd()
+
+
+def _analysis_script_path() -> Optional[str]:
+    env_script = (os.environ.get("HERO_ANALYSIS_SCRIPT") or "").strip()
+    candidates: List[str] = []
+    if env_script:
+        if os.path.isabs(env_script):
+            candidates.append(env_script)
+        else:
+            candidates.append(os.path.join(_project_base_dir(), env_script))
+    candidates.extend(
+        [
+            os.path.join(_project_base_dir(), "differs_agent.py"),
+            os.path.join(os.getcwd(), "differs_agent.py"),
+            os.path.expanduser("~/HeroX/differs_agent.py"),
+        ]
+    )
+    for p in candidates:
+        try:
+            if p and os.path.exists(p):
+                return p
+        except Exception:
+            continue
+    return None
+
+
+def _read_analysis_pid() -> int:
+    try:
+        if not os.path.exists(ANALYSIS_PID_FILE):
+            return 0
+        with open(ANALYSIS_PID_FILE, "r", encoding="utf-8") as f:
+            return int((f.read() or "0").strip() or "0")
+    except Exception:
+        return 0
+
+
+def _write_analysis_pid(pid: int) -> None:
+    try:
+        with open(ANALYSIS_PID_FILE, "w", encoding="utf-8") as f:
+            f.write(str(int(pid)))
+    except Exception as e:
+        _err(f"_write_analysis_pid failed: {e}")
+
+
+def _clear_analysis_pid() -> None:
+    try:
+        if os.path.exists(ANALYSIS_PID_FILE):
+            os.remove(ANALYSIS_PID_FILE)
+    except Exception:
+        pass
+
+
+def _is_pid_alive(pid: int) -> bool:
+    try:
+        pid = int(pid or 0)
+        if pid <= 0:
+            return False
+        if os.name == "nt":
+            proc = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+            out = (proc.stdout or "").lower()
+            return str(pid) in out and "no tasks are running" not in out
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
+def _analysis_running() -> bool:
+    global GLOBAL_ANALYSIS_PROC
+    with GLOBAL_ANALYSIS_PROC_LOCK:
+        try:
+            if GLOBAL_ANALYSIS_PROC is not None and GLOBAL_ANALYSIS_PROC.poll() is None:
+                return True
+        except Exception:
+            pass
+    pid = _read_analysis_pid()
+    if _is_pid_alive(pid):
+        return True
+    return session_exists("differs_agent")
+
+
+def _derive_sse_url_from_push(push_url: str) -> str:
+    try:
+        u = _urllib_parse.urlparse(push_url)
+        if not u.scheme or not u.netloc:
+            raise RuntimeError("bad_push_url")
+        return _urllib_parse.urlunparse((u.scheme, u.netloc, "/events", "", "", ""))
+    except Exception:
+        return os.environ.get("HERO_DASHBOARD_SSE_URL") or "http://127.0.0.1:5000/events"
+
+
+def _start_analysis_process(push_url: str) -> Dict[str, Any]:
+    global GLOBAL_ANALYSIS_PROC
+    with GLOBAL_ANALYSIS_PROC_LOCK:
+        if GLOBAL_ANALYSIS_PROC is not None:
+            try:
+                if GLOBAL_ANALYSIS_PROC.poll() is None:
+                    return {"ok": True, "already_running": True, "pid": int(GLOBAL_ANALYSIS_PROC.pid)}
+            except Exception:
+                pass
+
+        pid = _read_analysis_pid()
+        if _is_pid_alive(pid):
+            return {"ok": True, "already_running": True, "pid": int(pid)}
+
+        script = _analysis_script_path()
+        if not script:
+            return {"ok": False, "error": "differs_agent.py_not_found"}
+
+        python_exec = getattr(sys, "executable", None) or "python"
+        env = dict(os.environ)
+        env["HERO_DASHBOARD_PUSH_URL"] = str(push_url)
+        env["HERO_DASHBOARD_SSE_URL"] = str(env.get("HERO_DASHBOARD_SSE_URL") or _derive_sse_url_from_push(push_url))
+
+        out_path = os.path.join(LOG_DIR, "differs_agent.out")
+        err_path = os.path.join(LOG_DIR, "differs_agent.err")
+        cmd = [python_exec, script]
+        popen_kwargs: Dict[str, Any] = {
+            "cwd": os.path.dirname(script),
+            "env": env,
+            "stdout": None,
+            "stderr": None,
+        }
+        if os.name == "nt":
+            popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        else:
+            popen_kwargs["start_new_session"] = True
+
+        try:
+            with open(out_path, "a", encoding="utf-8") as outf, open(err_path, "a", encoding="utf-8") as errf:
+                popen_kwargs["stdout"] = outf
+                popen_kwargs["stderr"] = errf
+                proc = subprocess.Popen(cmd, **popen_kwargs)
+            GLOBAL_ANALYSIS_PROC = proc
+            _write_analysis_pid(int(proc.pid))
+            _log(f"_start_analysis_process: started pid={proc.pid} script={script}")
+            return {"ok": True, "pid": int(proc.pid), "script": script, "python": python_exec}
+        except Exception as e:
+            _err(f"_start_analysis_process failed: {e}")
+            return {"ok": False, "error": str(e)}
+
+
+def _stop_analysis_process() -> Dict[str, Any]:
+    global GLOBAL_ANALYSIS_PROC
+    notes: List[str] = []
+    stopped = False
+    with GLOBAL_ANALYSIS_PROC_LOCK:
+        proc = GLOBAL_ANALYSIS_PROC
+        GLOBAL_ANALYSIS_PROC = None
+
+    if proc is not None:
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=6)
+                except Exception:
+                    proc.kill()
+                stopped = True
+        except Exception as e:
+            notes.append(f"proc_terminate:{e}")
+
+    pid = _read_analysis_pid()
+    if pid and _is_pid_alive(pid):
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=False, capture_output=True)
+            else:
+                os.kill(int(pid), 15)
+            stopped = True
+        except Exception as e:
+            notes.append(f"pid_kill:{e}")
+
+    _clear_analysis_pid()
+    return {"ok": True, "stopped": bool(stopped), "notes": notes}
 
 
 # ---------- Minimal Deriv websocket fallback client (authorize + balance only) ----------
@@ -1590,6 +1804,14 @@ def _make_prediction_id():
     import uuid, time
     return f"pred_{int(time.time()*1000)}_{uuid.uuid4().hex[:8]}"
 
+
+def _first_present(obj: dict, keys: List[str]) -> Any:
+    for k in keys:
+        if k in obj and obj.get(k) is not None:
+            return obj.get(k)
+    return None
+
+
 def add_prediction_log(payload: dict) -> dict:
     """
     Lightweight logging for produced predictions.
@@ -1608,7 +1830,7 @@ def add_prediction_log(payload: dict) -> dict:
             return {"ok": False, "error": "missing symbol"}
 
         # normalize prediction digit
-        raw_digit = payload.get("prediction_digit") or payload.get("predicted") or payload.get("pred")
+        raw_digit = _first_present(payload, ["prediction_digit", "predicted", "pred", "digit"])
         try:
             pred_digit = int(raw_digit) if raw_digit is not None else None
         except Exception:
@@ -2572,7 +2794,7 @@ def control_place_trade():
 
         # symbol / prediction digit normalization
         symbol = (obj.get("symbol") or obj.get("market") or "").strip().upper()
-        pred_digit = obj.get("prediction_digit") or obj.get("predicted") or obj.get("pred") or obj.get("digit") or None
+        pred_digit = _first_present(obj, ["prediction_digit", "predicted", "pred", "digit"])
         try:
             if pred_digit is not None:
                 pred_digit = int(pred_digit)
@@ -2922,18 +3144,14 @@ def stop_ticks():
 @app.route("/control/start_analysis", methods=["POST"])
 def control_start_analysis():
     """
-    Start the analysis agent (differs_agent.py) in a tmux session named 'differs_agent'.
-    Uses the virtualenv python at ~/HeroX/venv/bin/python if present; falls back to sys.executable or python3.
-    Returns JSON: {"ok": True, "session": "differs_agent", "push_url": "..."} on success.
+    Start differs_agent.py in the background (cross-platform, no separate manual command).
     """
-    # Only enforce admin token if server configured an ADMIN_TOKEN (existing helper is safe)
     try:
         _check_admin_token(request)
     except Exception as e:
         _err(f"start_analysis admin token check failed: {e}")
         return jsonify({"ok": False, "error": "forbidden"}), 403
 
-    # Prevent immediate restart after a recent manual stop
     try:
         global GLOBAL_ANALYSIS_LAST_STOP_TS
         if GLOBAL_ANALYSIS_LAST_STOP_TS and (time.time() - GLOBAL_ANALYSIS_LAST_STOP_TS) < 2.0:
@@ -2943,68 +3161,43 @@ def control_start_analysis():
         pass
 
     push_url = _dashboard_push_url_from_request(request)
-    sess = "differs_agent"
     _log(f"start_analysis computed push_url={push_url}")
 
-    base_dir = os.path.expanduser("~/HeroX")
-    candidate_script = "differs_agent.py"  # explicit: only start this file
-    candidate_args = ""  # place args here if needed
-    script_path = os.path.join(base_dir, candidate_script)
-
-    if not os.path.exists(script_path):
-        msg = f"{candidate_script} not found at {script_path}; cannot start analysis"
-        _err(f"start_analysis failed: {msg}")
-        try:
-            _broadcast_analysis({"analysis_event": "analysis_missing", "message": msg})
-        except Exception:
-            pass
-        return jsonify({"ok": False, "error": msg}), 500
-
-    # Determine python executable to use for the tmux-launched process.
-    # Prefer the virtualenv python inside ~/HeroX/venv/bin/python for deterministic environment.
     try:
-        venv_python = os.path.expanduser("~/HeroX/venv/bin/python")
-        if os.path.exists(venv_python) and os.access(venv_python, os.X_OK):
-            python_exec = venv_python
-        else:
-            python_exec = getattr(sys, "executable", None) or "python3"
-    except Exception:
-        python_exec = "python3"
-
-    # Build a robust shell command that:
-    # - cds to base dir
-    # - exports the push URL
-    # - executes the script with the chosen python executable
-    # - redirects stdout/stderr to log files
-    safe_push = str(push_url).replace("'", "'\"'\"'")
-    cmd_shell = (
-        f"cd {shlex.quote(base_dir)} && "
-        f"export HERO_DASHBOARD_PUSH_URL='{safe_push}' && "
-        f"sleep 0.3 && "
-        f"exec {shlex.quote(python_exec)} {shlex.quote(candidate_script)} {candidate_args} "
-        f"> ~/.hero_logs/differs_agent.out 2> ~/.hero_logs/differs_agent.err"
-    )
-
-    try:
-        # If already running, return success (idempotent)
-        if session_exists(sess):
-            _log(f"start_analysis called but session {sess} already exists (idempotent)")
+        res = _start_analysis_process(push_url)
+        if not res.get("ok"):
+            msg = str(res.get("error") or "analysis_start_failed")
+            _err(f"start_analysis failed: {msg}")
             try:
-                _broadcast_analysis({"analysis_event": "analysis_started", "message": "analysis agent already running", "session": sess})
+                _broadcast_analysis({"analysis_event": "analysis_start_failed", "message": msg})
             except Exception:
                 pass
-            return jsonify({"ok": True, "session": sess, "push_url": push_url})
+            return jsonify({"ok": False, "error": msg}), 500
 
-        # Attempt to spawn tmux session (this uses _spawn_tmux_session which already handles duplicate-session)
-        _spawn_tmux_session(sess, cmd_shell)
-
-        _log(f"start_analysis requested; session {sess} spawn attempted (script={candidate_script} python={python_exec})")
+        _log(f"start_analysis: pid={res.get('pid')} already_running={bool(res.get('already_running'))}")
         try:
-            _broadcast_analysis({"analysis_event": "analysis_started", "message": "analysis agent started", "session": sess})
+            _broadcast_analysis(
+                {
+                    "analysis_event": "analysis_started",
+                    "message": "analysis agent started",
+                    "pid": res.get("pid"),
+                    "already_running": bool(res.get("already_running")),
+                }
+            )
         except Exception:
             pass
 
-        return jsonify({"ok": True, "session": sess, "push_url": push_url, "python": python_exec})
+        return jsonify(
+            {
+                "ok": True,
+                "session": "differs_agent",
+                "push_url": push_url,
+                "pid": res.get("pid"),
+                "already_running": bool(res.get("already_running")),
+                "script": res.get("script"),
+                "python": res.get("python"),
+            }
+        )
     except Exception as e:
         _err(f"start_analysis failed: {e}")
         try:
@@ -3020,37 +3213,17 @@ def control_stop_analysis():
     sess = "differs_agent"
     errors = []
     try:
-        # 1) try tmux kill-session
+        stop_res = _stop_analysis_process()
+        if isinstance(stop_res, dict):
+            errors.extend(stop_res.get("notes") or [])
+
+        # best-effort legacy cleanup for tmux/linux deployments
         try:
             subprocess.run(["tmux", "kill-session", "-t", sess], check=False)
         except Exception as e:
             errors.append(f"tmux_kill: {e}")
 
-        # 2) pkill common patterns (try multiple times)
-        patterns = ("differs_agent.py", "differs_agent_light.py", "differs_agent_adaptive.py")
-        for p in patterns:
-            try:
-                subprocess.run(["pkill", "-f", p], check=False)
-            except Exception as e:
-                errors.append(f"pkill_{p}: {e}")
-
-        # 3) wait a short while and verify session/process absence
-        gone = False
-        for _ in range(6):  # ~3 seconds total (6 * 0.5s)
-            time.sleep(0.5)
-            try:
-                if not session_exists(sess):
-                    gone = True
-                    break
-            except Exception:
-                pass
-
-        if not gone:
-            # final attempt: attempt pkill by python invocation string
-            try:
-                subprocess.run(["pkill", "-f", "python.*differs_agent"], check=False, shell=False)
-            except Exception as e:
-                errors.append(f"pkill_final: {e}")
+        gone = not _analysis_running()
 
         _log(f"stop_analysis requested; session {sess} attempted kill; verified_gone={gone}")
         try:
@@ -3249,7 +3422,7 @@ def _monitor_loop():
     while True:
         try:
             deriv_here = session_exists("hero_worker")
-            analysis_here = session_exists("differs_agent")
+            analysis_here = _analysis_running() or session_exists("differs_agent")
 
             if deriv_here and not _monitor_state["deriv_prev"]:
                 _log("monitor: deriv session appeared")
@@ -3365,7 +3538,7 @@ if __name__ == "__main__":
         # --- start trader tmux session automatically (differ_trade_check.py) ---
         try:
             sess_trader = "differ_trader"
-            base_dir = os.path.expanduser("~/HeroX")
+            base_dir = _project_base_dir()
             candidate_trader = "differs_trade_check.py"  # NOTE: keep original file name; you used differs_trade_check.py earlier — ensure correct name on disk
             # Allow fallback names in case of naming mismatch
             candidate_trader_alts = ["differ_trade_check.py", "differs_trade_check.py", "differ_trade_check_differ.py"]
@@ -3374,6 +3547,13 @@ if __name__ == "__main__":
                 if os.path.exists(os.path.join(base_dir, c)):
                     chosen_trader = c
                     break
+            if chosen_trader is None:
+                legacy_base = os.path.expanduser("~/HeroX")
+                for c in [candidate_trader] + candidate_trader_alts:
+                    if os.path.exists(os.path.join(legacy_base, c)):
+                        base_dir = legacy_base
+                        chosen_trader = c
+                        break
 
             if chosen_trader is None:
                 # fallback to the earlier name user provided (differ_trade_check.py)
@@ -3429,6 +3609,18 @@ if __name__ == "__main__":
         except Exception as e:
             _err(f"failed to start monitor thread: {e}")
 
+        # Auto-start differs agent so only hero_service.py needs to be launched.
+        try:
+            if str(os.environ.get("HERO_AUTO_START_ANALYSIS", "1")).strip().lower() in ("1", "true", "yes", "on"):
+                push_url = os.environ.get("HERO_DASHBOARD_PUSH_URL") or f"http://127.0.0.1:{port}/control/push_tick"
+                res = _start_analysis_process(push_url)
+                if not res.get("ok"):
+                    _err(f"auto-start analysis failed: {res.get('error')}")
+                else:
+                    _log(f"auto-start analysis ok: pid={res.get('pid')} already_running={bool(res.get('already_running'))}")
+        except Exception as e:
+            _err(f"auto-start analysis exception: {e}")
+
         # Attempt to auto-start HL trade daemon (optional) — safe guarded
         try:
             start_trade_daemon_once()
@@ -3443,5 +3635,9 @@ if __name__ == "__main__":
         _err(f"hero_service main exception: {e}")
     finally:
         _log("hero_service: running graceful shutdown")
+        try:
+            _stop_analysis_process()
+        except Exception:
+            pass
         _shutdown_all_account_managers(timeout=3.0)
         _log("hero_service: shutdown finished")

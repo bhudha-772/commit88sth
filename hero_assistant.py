@@ -1295,6 +1295,15 @@ class HeroAssistantEngine:
             self._record_chat("user", msg)
             m = msg.lower()
 
+            if m in ("hi", "hello", "hey", "yo", "sup", "good morning", "good afternoon", "good evening"):
+                st = self.stats_snapshot()
+                runtime = st.get("runtime") or {}
+                return done(
+                    "Hi. "
+                    f"Deriv={runtime.get('tick_state')} | analysis={runtime.get('analysis_state')} | "
+                    f"settled={st.get('total_settled_predictions', 0)}."
+                )
+
             if m.startswith("learn about "):
                 topic = msg[len("learn about ") :].strip()
                 if not topic:
@@ -1522,10 +1531,12 @@ class HeroAssistantEngine:
         if isinstance(out, str) and out.strip():
             return done(out.strip())
         llm = get_last_llm_status()
-        return done(
-            "I could not get a model response right now. "
-            f"Provider={llm.get('provider')} model={llm.get('model')} error={llm.get('error')}."
+        fallback = (
+            "I cannot reach the model right now. "
+            f"Provider={llm.get('provider')} model={llm.get('model')} error={llm.get('error')}. "
+            "You can still ask for status, tasks, memories, knowledge, or news."
         )
+        return done(fallback)
 
 
 assistant_engine = HeroAssistantEngine()

@@ -228,13 +228,6 @@ document.addEventListener('DOMContentLoaded', () => {
       lastRawEvents.unshift(item);
       if (lastRawEvents.length > MAX_DEBUG) lastRawEvents.length = MAX_DEBUG;
       renderDebug();
-      if (VERBOSE_SSE_CONSOLE) {
-        console.groupCollapsed && console.groupCollapsed('Journal SSE event (parsed)');
-        console.log('note:', note);
-        console.log('raw:', payload);
-        console.log('extracted:', extracted);
-        console.groupEnd && console.groupEnd();
-      }
     } catch (e) { console.error('debug add err', e); }
   }
   function renderDebug() {

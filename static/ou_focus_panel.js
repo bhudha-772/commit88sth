@@ -63,15 +63,9 @@
     root.id = ROOT_ID;
     root.innerHTML = `
       <style>
-        #${ROOT_ID} .ou-btn{
-          position:fixed;left:14px;bottom:18px;z-index:2100000;
-          width:46px;height:46px;border-radius:12px;border:1px solid rgba(2,6,23,.18);
-          background:linear-gradient(180deg,#f8fafc,#e2e8f0);color:#0f172a;
-          font-weight:800;cursor:pointer;box-shadow:0 14px 30px rgba(2,6,23,.22)
-        }
         #${ROOT_ID} .ou-panel{
-          position:fixed;left:14px;bottom:72px;z-index:2100000;
-          width:min(420px,95vw);max-height:min(82vh,760px);overflow:auto;
+          position:fixed;right:14px;top:78px;z-index:2100000;
+          width:min(460px,95vw);max-height:min(82vh,760px);overflow:auto;
           border-radius:14px;border:1px solid rgba(2,6,23,.12);
           background:linear-gradient(180deg,#ffffff,#f8fafc);
           box-shadow:0 22px 70px rgba(2,6,23,.30);padding:12px;display:none
@@ -95,7 +89,6 @@
         #${ROOT_ID} .ou-sig-item{border:1px solid rgba(2,6,23,.10);border-radius:9px;padding:7px;background:#fff}
         #${ROOT_ID} .ou-meta{font-size:11px;color:#64748b}
       </style>
-      <button class="ou-btn" id="ouOpenBtn" title="Open Over/Under panel">OU</button>
       <div class="ou-panel" id="ouPanel">
         <div class="ou-h">
           <h3>OU Focus Engine</h3>
@@ -127,18 +120,27 @@
     `;
     document.body.appendChild(root);
 
-    const btn = root.querySelector("#ouOpenBtn");
     const panel = root.querySelector("#ouPanel");
     const close = root.querySelector("#ouCloseBtn");
-    btn.addEventListener("click", function () {
-      state.open = !state.open;
-      panel.classList.toggle("open", state.open);
-      if (state.open) refreshNow();
-    });
     close.addEventListener("click", function () {
       state.open = false;
       panel.classList.remove("open");
     });
+    window.openOUFocusPanel = function () {
+      state.open = true;
+      panel.classList.add("open");
+      refreshNow();
+    };
+    window.closeOUFocusPanel = function () {
+      state.open = false;
+      panel.classList.remove("open");
+    };
+    const navBtn = document.getElementById("btnOpenOUPanel");
+    if (navBtn) {
+      navBtn.addEventListener("click", function () {
+        window.openOUFocusPanel();
+      });
+    }
 
     root.querySelector("#ouSaveBtn").addEventListener("click", async function () {
       try {
