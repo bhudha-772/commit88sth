@@ -1,0 +1,82 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>HeroX - Digit Over/Under</title>
+  <style>
+    :root { --bg:#f8fafc; --fg:#0f172a; --muted:#475569; --ok:#166534; --line:rgba(15,23,42,.12); }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear-gradient(180deg,#f8fafc,#ffffff); color:var(--fg); }
+    .wrap { max-width:1280px; margin:18px auto; padding:0 14px 18px; }
+    .top { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:12px; }
+    .top h1 { margin:0; font-size:22px; }
+    .links { display:flex; gap:10px; align-items:center; }
+    .links a { color:#0f172a; text-decoration:none; border:1px solid var(--line); border-radius:10px; padding:7px 10px; background:#fff; }
+    .grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-bottom:10px; }
+    .card { border:1px solid var(--line); border-radius:12px; padding:10px; background:#fff; box-shadow:0 8px 24px rgba(2,6,23,.05); }
+    .k { font-size:12px; color:var(--muted); }
+    .v { margin-top:4px; font-size:18px; font-weight:800; }
+    .v.ok { color:var(--ok); }
+    .layout { display:grid; grid-template-columns:1.2fr 1fr; gap:10px; }
+    .tbl { width:100%; border-collapse:collapse; font-size:12px; }
+    .tbl th,.tbl td { text-align:left; border-bottom:1px solid rgba(2,6,23,.08); padding:8px 6px; }
+    .tbl th { color:var(--muted); font-weight:700; font-size:11px; }
+    .mono { font-family:ui-monospace,Consolas,monospace; }
+    .feed { max-height:260px; overflow:auto; font-size:12px; }
+    .feed .row { border-bottom:1px dashed rgba(2,6,23,.12); padding:6px 2px; }
+    .sub { color:var(--muted); font-size:12px; margin-top:4px; }
+    @media (max-width:1100px) { .grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .layout { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div>
+        <h1>Digit Over/Under Auto Trader</h1>
+        <div class="sub">Automatic mode: analyzes all focused markets, picks strongest edge, posts prediction, waits for settlement, then continues.</div>
+      </div>
+      <div class="links">
+        <a href="/">Markets</a>
+        <a href="/charts">Charts</a>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card"><div class="k">Engine</div><div class="v" id="sEngine">-</div></div>
+      <div class="card"><div class="k">Best Market</div><div class="v" id="sBest">-</div></div>
+      <div class="card"><div class="k">Outstanding Prediction</div><div class="v" id="sPending">-</div></div>
+      <div class="card"><div class="k">Signals / Settled</div><div class="v" id="sStats">-</div></div>
+    </div>
+
+    <div class="layout">
+      <div class="card">
+        <h3 style="margin:0 0 8px 0;">Live Analysis (Top Markets)</h3>
+        <table class="tbl" id="analysisTable">
+          <thead><tr><th>Symbol</th><th>Samples</th><th>Best Contract</th><th>p</th><th>p_be</th><th>EV</th></tr></thead>
+          <tbody><tr><td colspan="6">Loading...</td></tr></tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 8px 0;">Recent OU Signals</h3>
+        <div id="signalFeed" class="feed"></div>
+      </div>
+    </div>
+
+    <div class="layout" style="margin-top:10px;">
+      <div class="card">
+        <h3 style="margin:0 0 8px 0;">Settlements Journal (OU)</h3>
+        <table class="tbl" id="settleTable">
+          <thead><tr><th>ts</th><th>market</th><th>contract</th><th>pred</th><th>actual</th><th>result</th><th>profit</th></tr></thead>
+          <tbody><tr><td colspan="7">Loading...</td></tr></tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 8px 0;">Event Feed</h3>
+        <div id="eventFeed" class="feed mono"></div>
+      </div>
+    </div>
+  </div>
+  <script src="/static/ou_page.js"></script>
+</body>
+</html>

@@ -295,7 +295,17 @@ def notify_hero_push(payload: dict):
         return False
 
 # Reliable small wrapper that ensures the expected final payload shape and retries a couple times
-def push_final_to_hero(final_contract: dict, prediction_id: str = None, predicted_digit: int = None, result: str = None, profit: float = None, profit_percentage: float = None):
+def push_final_to_hero(
+    final_contract: dict,
+    prediction_id: str = None,
+    predicted_digit: int = None,
+    result: str = None,
+    profit: float = None,
+    profit_percentage: float = None,
+    contract_type: str = None,
+    barrier: str = None,
+    prediction_mode: str = None,
+):
     """
     Build a canonical 'prediction_result' payload and send it to hero dashboard.
     This enforces strict canonical fields:
@@ -383,6 +393,9 @@ def push_final_to_hero(final_contract: dict, prediction_id: str = None, predicte
             "prediction_digit": (int(predicted_digit) if predicted_digit is not None else None),
             "market": market,
             "symbol": symbol,
+            "contract_type": (str(contract_type).upper() if contract_type else None),
+            "barrier": (str(barrier) if barrier is not None else None),
+            "prediction_mode": (str(prediction_mode) if prediction_mode else None),
             # 'actual' and 'result_digit' are the same concept: include both for compatibility
             "actual": actual_digit,
             "result_digit": actual_digit,
@@ -405,11 +418,21 @@ def push_final_to_hero(final_contract: dict, prediction_id: str = None, predicte
             elif pp is not None:
                 payload['result'] = 'WIN' if float(pp) > 0 else 'LOSS'
             else:
-                # as a last resort, if actual equals predicted and we have both, mark WIN; else LOSS
+                # Last-resort inference if profit fields are missing.
                 pred = payload.get('prediction_digit')
                 act = payload.get('actual')
                 try:
-                    if (pred is not None) and (act is not None) and int(pred) == int(act):
+                    ctype = str(payload.get("contract_type") or "").upper()
+                    bar = payload.get("barrier")
+                    if ctype == "DIGITDIFF":
+                        payload['result'] = 'WIN' if (pred is not None and act is not None and int(pred) != int(act)) else 'LOSS'
+                    elif ctype == "DIGITOVER":
+                        thresh = int(bar if bar is not None else pred)
+                        payload['result'] = 'WIN' if (act is not None and int(act) > int(thresh)) else 'LOSS'
+                    elif ctype == "DIGITUNDER":
+                        thresh = int(bar if bar is not None else pred)
+                        payload['result'] = 'WIN' if (act is not None and int(act) < int(thresh)) else 'LOSS'
+                    elif (pred is not None) and (act is not None) and int(pred) == int(act):
                         payload['result'] = 'WIN'
                     else:
                         payload['result'] = 'LOSS'
@@ -665,7 +688,7 @@ def start_sse_listener(sse_url: str, loop: asyncio.AbstractEventLoop, queue: "as
 
                                         if dedupged:
                                             # skip duplicate prediction event
-                                            log("SSE: skipped duplicate prediction pid=%s", pid)
+                                            log.info("SSE: skipped duplicate prediction pid=%s", pid)
                                             continue
 
                                         pd = payload.get("prediction_digit") or payload.get("predicted") or payload.get("pred")
@@ -1170,14 +1193,33 @@ async def run_trade_daemon(sse_url: str = None):
             pdigit = None
             target_symbol = None
             mode = None
+            signal_contract_type = "DIGITDIFF"
+            signal_barrier = None
+            signal_prediction_id = None
+            signal_prediction_mode = None
             try:
                 if isinstance(item, (list, tuple)) and len(item) >= 2:
                     pdigit, target_symbol = item[0], item[1]
                 elif isinstance(item, dict):
                     # payload might be full analysis object
-                    pdigit = item.get("prediction_digit") or item.get("predicted") or item.get("pred") or item.get("digit") or None
+                    pdigit = (
+                        item.get("prediction_digit")
+                        if item.get("prediction_digit") is not None
+                        else item.get("predicted")
+                        if item.get("predicted") is not None
+                        else item.get("pred")
+                        if item.get("pred") is not None
+                        else item.get("digit")
+                    )
                     target_symbol = item.get("market") or item.get("symbol") or item.get("instrument") or SYMBOL
                     mode = item.get("mode") or item.get("account") or None
+                    signal_prediction_id = item.get("prediction_id") or item.get("pred_id") or item.get("id")
+                    signal_prediction_mode = item.get("prediction_mode") or item.get("mode_name")
+                    ctype = str(item.get("contract_type") or item.get("trade_contract_type") or "").strip().upper()
+                    if ctype in ("DIGITDIFF", "DIGITOVER", "DIGITUNDER"):
+                        signal_contract_type = ctype
+                    if item.get("barrier") is not None:
+                        signal_barrier = str(item.get("barrier"))
                 else:
                     pdigit = item
                 # fallback to global SYMBOL if no market provided
@@ -1204,11 +1246,20 @@ async def run_trade_daemon(sse_url: str = None):
 
             # when we receive a predicted digit, try to create a DIGITDIFF proposal with that barrier and buy
             try:
-                chosen_barrier = str(int(pdigit) % 10)
+                if signal_barrier is not None and str(signal_barrier).strip() != "":
+                    chosen_barrier = str(int(signal_barrier) % 10)
+                else:
+                    chosen_barrier = str(int(pdigit) % 10)
             except Exception:
                 # fallback random barrier
                 chosen_barrier = pick_random_barrier()
-            log.info("Daemon: received prediction digit=%s for market=%s -> attempting trade (mode=%s)", chosen_barrier, target_symbol, mode)
+            log.info(
+                "Daemon: received prediction digit=%s contract_type=%s market=%s -> attempting trade (mode=%s)",
+                chosen_barrier,
+                signal_contract_type,
+                target_symbol,
+                mode,
+            )
 
             # optional: small delay to avoid sending proposals too quickly
             await asyncio.sleep(0.05)
@@ -1247,7 +1298,7 @@ async def run_trade_daemon(sse_url: str = None):
                 "proposal": 1,
                 "amount": float(stake_amount),    # <-- use per-signal stake
                 "basis": "stake",
-                "contract_type": "DIGITDIFF",
+                "contract_type": signal_contract_type,
                 "currency": CURRENCY,
                 "duration": int(DURATION),
                 "duration_unit": DURATION_UNIT,
@@ -1301,7 +1352,7 @@ async def run_trade_daemon(sse_url: str = None):
                     "proposal": 1,
                     "amount": float(stake_amount),    # <-- ensure amount included here too
                     "basis": "stake",
-                    "contract_type": "DIGITDIFF",
+                    "contract_type": signal_contract_type,
                     "currency": CURRENCY,
                     "duration": int(DURATION),
                     "duration_unit": DURATION_UNIT,
@@ -1338,11 +1389,14 @@ async def run_trade_daemon(sse_url: str = None):
             # Notify dashboard (toast) that we took a trade
             toast = {
                 "analysis_event": "prediction_toast",
-                "prediction_id": proposal_id or contract_id or f"trade_{int(time.time()*1000)}",
+                "prediction_id": signal_prediction_id or proposal_id or contract_id or f"trade_{int(time.time()*1000)}",
                 "symbol": target_symbol,
                 "market": target_symbol,
                 "digit": int(chosen_barrier),
-                "message": f"Auto-trade placed barrier={chosen_barrier} amount={AMOUNT} mode={mode}",
+                "contract_type": signal_contract_type,
+                "barrier": chosen_barrier,
+                "prediction_mode": signal_prediction_mode,
+                "message": f"Auto-trade placed type={signal_contract_type} barrier={chosen_barrier} amount={stake_amount} mode={mode}",
                 "status": "posted",
                 "epoch": int(time.time()),
             }
@@ -1408,7 +1462,10 @@ async def run_trade_daemon(sse_url: str = None):
                             predicted_digit=pred_digit,
                             result=result_str,
                             profit=p_val,
-                            profit_percentage=p_pct
+                            profit_percentage=p_pct,
+                            contract_type=signal_contract_type,
+                            barrier=chosen_barrier,
+                            prediction_mode=signal_prediction_mode,
                         )
                     except Exception as ex:
                         log.warning("Daemon: failed to push final contract: %s", ex)

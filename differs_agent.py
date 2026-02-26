@@ -93,48 +93,9 @@ DEFAULT_PREDICTION_MODE = os.environ.get("DIFFER_PREDICTION_MODE", "differ").low
 # NEW: number of ticks from same market required to allow reanalysis/repost earlier than MIN_INTERVAL_MARKET
 REANALYZE_TICKS = int(os.environ.get("DIFFER_REANALYZE_TICKS", "10"))
 
-# ------------------ Prediction cooldown state (simpler) ------------------
-# Old tick-block logic removed. We now use a strict global cooldown so the agent
-# will wait exactly PREDICTION_COOLDOWN_SEC seconds after any prediction before
-# attempting another. This avoids waiting for server settlements / tick-counts.
-
-PREDICTION_COOLDOWN_SEC = float(os.environ.get("PREDICTION_COOLDOWN_SEC", "10.0"))
-# per-market last prediction timestamp (kept for stats but NOT used for blocking)
-last_prediction_ts: Dict[str, float] = defaultdict(float)
-# global timestamp of last prediction (used for cooldown)
-LAST_PRED_TS_GLOBAL = 0.0
-# lock to protect the global timestamp
-_prediction_lock = threading.Lock()
-
-def can_post_prediction() -> bool:
-    """Return True only if global cooldown has elapsed."""
-    try:
-        with _prediction_lock:
-            if LAST_PRED_TS_GLOBAL <= 0.0:
-                return True
-            elapsed = time.time() - LAST_PRED_TS_GLOBAL
-        return elapsed >= float(PREDICTION_COOLDOWN_SEC)
-    except Exception:
-        return True
-
-def register_prediction_posted(market: str):
-    """Record that a prediction was posted now (update both global and per-market stamps)."""
-    global LAST_PRED_TS_GLOBAL
-    try:
-        ts = time.time()
-        with _prediction_lock:
-            LAST_PRED_TS_GLOBAL = ts
-        if market:
-            try:
-                last_prediction_ts[str(market).upper()] = ts
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-# Deprecated/tidied: Removed PREDICTION_TICK_TARGET, PREDICTION_TIMEOUT_SEC,
-# _prediction_block, pending_pid, pending_by_symbol, start_prediction_block, _on_block_tick, etc.
-# ------------------ end prediction cooldown state ------------------
+# One-trade-at-a-time gate:
+# post a prediction, then wait for settlement before posting the next.
+# Timeout is only a safety valve if settlement event is never received.
 
 
 
@@ -978,14 +939,12 @@ def run_agent(
     # nested helper: try to post prediction when ranking shows a clear unique top market and unique top digit
     def maybe_try_predict(st: Optional[dict]):
         """
-        Simplified prediction decision:
+        Settlement-gated prediction decision:
         - Require a clear unique top market AND a clear unique top digit.
-        - Enforce a strict global cooldown (PREDICTION_COOLDOWN_SEC) between any two predictions.
-        - Do NOT wait for server settlement; do NOT depend on tick counting.
+        - Allow only one outstanding prediction at a time.
+        - New prediction only after server settlement for the pending id.
         """
-        # LAST_PRED_TS_GLOBAL is expected to be a module-level/global variable.
-        global LAST_PRED_TS_GLOBAL
-        nonlocal last_toast_ts, last_prediction_ts
+        nonlocal last_toast_ts, last_prediction_ts, pending_pid, pending_since, pending_by_symbol
 
         try:
             if st is None:
@@ -993,15 +952,29 @@ def run_agent(
             if not prediction_push_url:
                 return
 
-            # global cooldown guard
+            # Gate: wait for settlement of the last posted prediction.
             try:
-                elapsed_global = time.time() - float(LAST_PRED_TS_GLOBAL or 0.0)
+                with _pending_pid_lock:
+                    cur_pending = pending_pid
+                    cur_age = (time.time() - float(pending_since or 0.0)) if cur_pending else 0.0
+                if cur_pending:
+                    if cur_age < float(PENDING_TIMEOUT_SECS):
+                        log_info(
+                            f"maybe_try_predict: waiting settlement for pending pid={cur_pending} "
+                            f"(age={cur_age:.2f}s < timeout={PENDING_TIMEOUT_SECS}s)"
+                        )
+                        return
+                    # safety timeout: release stuck pending state
+                    with _pending_pid_lock:
+                        log_info(
+                            f"maybe_try_predict: pending timeout exceeded ({cur_age:.2f}s) "
+                            f"for pid={pending_pid}; releasing pending gate"
+                        )
+                        pending_pid = None
+                        pending_since = 0.0
+                        pending_by_symbol = {}
             except Exception:
-                elapsed_global = 999999.0
-            if elapsed_global < float(PREDICTION_COOLDOWN_SEC):
-                # rate-limited by global cooldown
-                log_info(f"maybe_try_predict: global cooldown active ({elapsed_global:.2f}s elapsed, need {PREDICTION_COOLDOWN_SEC}s) — skipping")
-                return
+                pass
 
             # get fresh ranking
             ranking = analyzer.markets_ranking()
@@ -1177,15 +1150,16 @@ def run_agent(
                 log_info(f"maybe_try_predict: attempting to post pid={pid} market={top_symbol} digit={best_digit} top_conf={top_conf:.4f} best_conf={best_conf:.4f} reasons={reason_tokens}")
                 post_prediction_async(prediction_payload, prediction_push_url)
 
-                # register the posting (global cooldown + per-market stamp)
+                # mark pending until settlement arrives
                 try:
-                    register_prediction_posted(top_symbol)
-                except Exception:
-                    # fallback: update global directly if helper missing
-                    try:
-                        LAST_PRED_TS_GLOBAL = time.time()
-                    except Exception:
-                        pass
+                    with _pending_pid_lock:
+                        pending_pid = pid
+                        pending_since = time.time()
+                        pending_by_symbol = {top_symbol: pid}
+                        last_prediction_ts[top_symbol] = pending_since
+                    log_info(f"maybe_try_predict: pending gate armed pid={pid} symbol={top_symbol}")
+                except Exception as e:
+                    log_err(f"maybe_try_predict: failed to arm pending gate: {e}")
 
                 # reset per-market tick counter if present (harmless)
                 try:
@@ -1318,10 +1292,19 @@ def run_agent(
                                     except Exception:
                                         pass
 
-                                    # Clear pending pid if matches
-                                    # NOTE: pending-PID / tick-blocking removed — no pending clearing needed.
-                                    # We keep the journal_stats update and logging above; nothing to clear here.
-                                    pass
+                                    # Clear pending gate after settlement for the active prediction id.
+                                    try:
+                                        with _pending_pid_lock:
+                                            if pending_pid:
+                                                pid_s = str(pid or "")
+                                                cur_s = str(pending_pid or "")
+                                                if (pid_s and cur_s and pid_s == cur_s) or (not pid_s):
+                                                    log_info(f"pending cleared by settlement pid={pid_s or cur_s}")
+                                                    pending_pid = None
+                                                    pending_since = 0.0
+                                                    pending_by_symbol = {}
+                                    except Exception as eclr:
+                                        log_err(f"failed clearing pending gate: {eclr}")
 
 
                                     log_info(f"Received server settlement pid={pid} result={'WIN' if is_win else 'LOSS'} (server authoritative).")
@@ -1405,11 +1388,6 @@ def run_agent(
                     # ---- NEW: tick counter increment for reanalysis trigger ----
                     last_ticks_since_pred[cur_sym] = last_ticks_since_pred.get(cur_sym, 0) + 1
                     log_info(f"Tick: symbol={cur_sym} last_decimal={ld} tick_counter={last_ticks_since_pred[cur_sym]}")
-                    # drive global prediction-block state machine (if active)
-                    try:
-                        _on_block_tick(cur_sym)
-                    except Exception:
-                        pass
 
                     try:
                         st = agent_on_tick_notify(cur_sym, ld, epoch_val)

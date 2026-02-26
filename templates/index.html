@@ -161,8 +161,6 @@
         <button id="btnToggleBalances" class="btn" title="Toggle balances">Toggle Balances</button>
         <button id="btnStartDeriv" class="btn btn-glow">Start Deriv</button>
         <button id="btnStartAnalysis" class="btn btn-glow">Start Analysis</button>
-        
-
       </div>
 
       <button id="journal-header-btn" title="Open Prediction Journal" aria-label="Open Prediction Journal" class="header-btn">
@@ -176,8 +174,7 @@
 
       <div style="display:flex;align-items:center;gap:10px;margin-left:8px">
         <a href="/charts">Charts</a>
-        <button id="btnOpenAnalysisPanel" class="btn" type="button">Analysis</button>
-        <button id="btnOpenOUPanel" class="btn" type="button">Digit OU</button>
+        <a href="/ou">Digit OU</a>
       </div>
     </header>
 
@@ -588,6 +585,16 @@
         });
 
       })();
+
+      // floating analysis icon (persistent quick access)
+      const analysisIcon = document.createElement('div');
+      analysisIcon.className = 'floating-action';
+      analysisIcon.title = 'Open Analysis';
+      analysisIcon.setAttribute('role', 'button');
+      analysisIcon.setAttribute('tabindex', '0');
+      analysisIcon.setAttribute('aria-label', 'Open Analysis Panel');
+      analysisIcon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="#0f172a" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 13v6"/><path d="M12 9v10"/><path d="M17 5v14"/></svg>';
+      document.body.appendChild(analysisIcon);
 
       // journal removed; keep only essential controls for modal chooser / SSE
       const chooserSelected = new Set();
@@ -1441,7 +1448,7 @@
 
       document.getElementById('closeOverlayBtn').addEventListener('click', closeOverlay);
       function closeOverlay(){
-        const focusTarget = document.getElementById('btnOpenAnalysisPanel') || document.getElementById('btnStartAnalysis') || document.getElementById('btnStartDeriv');
+        const focusTarget = analysisIcon || document.getElementById('btnStartAnalysis') || document.getElementById('btnStartDeriv');
         try {
           if (document.activeElement && overlay.contains(document.activeElement) && document.activeElement.blur) {
             document.activeElement.blur();
@@ -1459,12 +1466,16 @@
         } catch(e){}
       }
 
-      const btnOpenAnalysisPanel = document.getElementById('btnOpenAnalysisPanel');
-      if (btnOpenAnalysisPanel) {
-        btnOpenAnalysisPanel.addEventListener('click', function(){
+      analysisIcon.addEventListener('click', function(){
+        openAnalysisPanel();
+      });
+      analysisIcon.addEventListener('keydown', function(ev){
+        const k = (ev && ev.key) ? ev.key : '';
+        if(k === 'Enter' || k === ' '){
+          ev.preventDefault();
           openAnalysisPanel();
-        });
-      }
+        }
+      });
 
       // start SSE
       attachSSE();
@@ -2069,7 +2080,6 @@
   </script>
   <script src="/static/hero_assistant_panel.js"></script>
   <script src="/static/autotrade_panel.js"></script>
-  <script src="/static/ou_focus_panel.js"></script>
   <script src="/static/auth_modal.js"></script>
 </body>
 </html>

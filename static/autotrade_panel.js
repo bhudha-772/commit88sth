@@ -440,13 +440,11 @@
       } else {
         incrementRecoveryOnLoss();
         appendRawDebugLine(`[recovery] LOSS detected → step=${runtime.settings.recovery_step} stake=${getCurrentStake()}`);
-        showToast(`Recovery: next stake ${fmtAmount(getCurrentStake())}`, 'warn', 2500);
       }
     } else if(res === 'WIN'){
       // on win we reset to base stake & recovery step 0
       resetRecoverySequence();
       appendRawDebugLine('[recovery] WIN detected → reset recovery sequence');
-      showToast(`Recovery reset — stake back to ${fmtAmount(getBaseStake())}`, 'ok', 2000);
     } else {
       // Ignore other statuses
     }

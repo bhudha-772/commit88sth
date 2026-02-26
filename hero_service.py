@@ -894,6 +894,7 @@ def _handle_settled_analysis(analysis_payload: dict):
             "symbol": market,
             "direction": direction,
             "trade_type": direction,
+            "prediction_mode": ap.get("prediction_mode") or ap.get("mode"),
             "contract_type": contract_type,
             "prediction_digit": pred_digit,
             "confidence": ap.get("confidence"),
@@ -913,9 +914,10 @@ def _handle_settled_analysis(analysis_payload: dict):
             "market": entry["symbol"],
             "direction": entry.get("direction"),
             "trade_type": entry.get("trade_type"),
+            "prediction_mode": entry.get("prediction_mode"),
             "contract_type": entry.get("contract_type"),
             "pred": entry.get("prediction_digit"),
-            "actual": (ap.get("final_contract") or {}).get("result_digit") if isinstance(ap.get("final_contract"), dict) else None,
+            "actual": entry.get("actual"),
             "result": entry.get("result"),
             "profit": entry.get("profit"),
             "pct": entry.get("profit_percentage"),
@@ -938,6 +940,12 @@ def _handle_settled_analysis(analysis_payload: dict):
         except Exception as _e:
             _err(f"_handle_settled_analysis write_journal_async failed: {_e}")
 
+        # Feed OU engine settlement gate when OU predictions settle.
+        try:
+            OU_ENGINE.on_settlement(entry)
+        except Exception as _e:
+            _err(f"OU settlement notify failed: {_e}")
+
         # Broadcast structured 'analysis' event (already used by UI)
         try:
             broadcast_payload = {
@@ -946,6 +954,7 @@ def _handle_settled_analysis(analysis_payload: dict):
                 "symbol": market,
                 "direction": direction,
                 "trade_type": direction,
+                "prediction_mode": entry.get("prediction_mode"),
                 "contract_type": contract_type,
                 "prediction_digit": pred_digit,
                 "result": entry.get("result"),
@@ -968,6 +977,7 @@ def _handle_settled_analysis(analysis_payload: dict):
                 "symbol": market,
                 "direction": direction,
                 "trade_type": direction,
+                "prediction_mode": entry.get("prediction_mode"),
                 "contract_type": contract_type,
                 "prediction_digit": pred_digit,
                 "result": entry.get("result"),
@@ -2067,8 +2077,16 @@ class OUStrategyEngine:
         self.total_ticks = 0
         self.total_analyses = 0
         self.total_signals = 0
+        self.total_settled = 0
+        self.pending_prediction_id: Optional[str] = None
+        self.pending_symbol: Optional[str] = None
+        self.pending_since = 0.0
+        self.pending_timeout_sec = max(20.0, float(os.environ.get("HERO_OU_PENDING_TIMEOUT_SEC", "120.0")))
 
         self._load_settings()
+        # OU workflow is intended to run fully automatically.
+        self.enabled = True
+        self.auto_predict = True
         _log(
             "OU engine initialized "
             f"(enabled={self.enabled} auto_predict={self.auto_predict} window={self.window_size} "
@@ -2197,10 +2215,43 @@ class OUStrategyEngine:
         except Exception:
             return None
 
+    def _global_best_signal_locked(self) -> Optional[Dict[str, Any]]:
+        best_row: Optional[Dict[str, Any]] = None
+        for snap in self.latest_by_symbol.values():
+            row = self._signal_row_from_snapshot(snap)
+            if not row:
+                continue
+            if best_row is None:
+                best_row = row
+                continue
+            cur = (
+                float(row.get("ev_per_stake") or -9.0),
+                float(row.get("lower_ci95") or 0.0),
+                float(row.get("p_hat") or 0.0),
+                int(row.get("samples") or 0),
+            )
+            prev = (
+                float(best_row.get("ev_per_stake") or -9.0),
+                float(best_row.get("lower_ci95") or 0.0),
+                float(best_row.get("p_hat") or 0.0),
+                int(best_row.get("samples") or 0),
+            )
+            if cur > prev:
+                best_row = row
+        return best_row
+
     def _emit_signal(self, signal_row: Dict[str, Any]) -> None:
         sym = str(signal_row.get("symbol") or "").upper()
         now = time.time()
         with self._lock:
+            if self.pending_prediction_id:
+                age = now - float(self.pending_since or 0.0)
+                if age < float(self.pending_timeout_sec):
+                    return
+                _log(f"OU pending timeout released pid={self.pending_prediction_id} age={age:.1f}s")
+                self.pending_prediction_id = None
+                self.pending_symbol = None
+                self.pending_since = 0.0
             if (now - float(self.last_prediction_ts.get(sym) or 0.0)) < float(self.predict_cooldown_sec):
                 return
             self.last_prediction_ts[sym] = now
@@ -2232,6 +2283,10 @@ class OUStrategyEngine:
         with self._lock:
             self.total_signals += 1
             self.signals.appendleft(dict(signal_row))
+            if signal_row["status"] == "posted" and signal_row.get("prediction_id"):
+                self.pending_prediction_id = str(signal_row.get("prediction_id"))
+                self.pending_symbol = sym
+                self.pending_since = time.time()
 
         try:
             _broadcast_analysis({"analysis_event": "ou_signal", "signal": signal_row})
@@ -2262,7 +2317,6 @@ class OUStrategyEngine:
             digits = list(self.buffers[sym])
 
         snapshot = self._build_symbol_snapshot(sym, int(epoch or now), digits)
-        signal = self._signal_row_from_snapshot(snapshot)
         with self._lock:
             self.latest_by_symbol[sym] = snapshot
             self.total_analyses += 1
@@ -2281,8 +2335,30 @@ class OUStrategyEngine:
         except Exception:
             pass
 
-        if self.auto_predict and signal:
-            self._emit_signal(signal)
+        if self.auto_predict:
+            best_signal = None
+            with self._lock:
+                best_signal = self._global_best_signal_locked()
+            if best_signal:
+                self._emit_signal(best_signal)
+
+    def on_settlement(self, payload: Dict[str, Any]) -> None:
+        if not isinstance(payload, dict):
+            return
+        pid = payload.get("prediction_id") or payload.get("pred_id") or payload.get("id")
+        ctype = str(payload.get("contract_type") or "").upper()
+        pmode = str(payload.get("prediction_mode") or payload.get("mode") or "").lower()
+        current_pending = str(self.pending_prediction_id or "")
+        pid_s = str(pid or "")
+        is_ou = pmode == "ou_focus" or ctype in ("DIGITOVER", "DIGITUNDER") or (current_pending and pid_s and pid_s == current_pending)
+        if not is_ou:
+            return
+        with self._lock:
+            self.total_settled += 1
+            if self.pending_prediction_id and pid_s and str(self.pending_prediction_id) == pid_s:
+                self.pending_prediction_id = None
+                self.pending_symbol = None
+                self.pending_since = 0.0
 
     def settings_snapshot(self, include_runtime: bool = True) -> Dict[str, Any]:
         with self._lock:
@@ -2304,6 +2380,10 @@ class OUStrategyEngine:
                         "total_ticks": int(self.total_ticks),
                         "total_analyses": int(self.total_analyses),
                         "total_signals": int(self.total_signals),
+                        "total_settled": int(self.total_settled),
+                        "pending_prediction_id": self.pending_prediction_id,
+                        "pending_symbol": self.pending_symbol,
+                        "pending_age_sec": float((time.time() - self.pending_since) if self.pending_prediction_id else 0.0),
                     }
                 )
             return out
@@ -2383,7 +2463,14 @@ class OUStrategyEngine:
                 self.total_ticks = 0
                 self.total_analyses = 0
                 self.total_signals = 0
+                self.total_settled = 0
+                self.pending_prediction_id = None
+                self.pending_symbol = None
+                self.pending_since = 0.0
                 self.buffers = defaultdict(lambda: deque(maxlen=self.window_size))
+            # Keep OU engine in automatic mode.
+            self.enabled = True
+            self.auto_predict = True
 
         if persist:
             self._save_settings()
@@ -2839,6 +2926,11 @@ def analysis_panel_html():
 def charts_page():
     # Render the charts template (templates/charts.html)
     return render_template("charts.html")
+
+
+@app.route("/ou")
+def ou_page():
+    return render_template("ou.html")
 
 
 @app.route("/details")
