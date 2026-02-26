@@ -741,7 +741,7 @@
         elems = Array.from(document.querySelectorAll('button,input[type=button],a')).filter(el=>{
           const txt = ((el.textContent || el.value || '') + '').trim().toLowerCase();
           const title = (el.getAttribute('title') || '').toLowerCase();
-          return txt.includes('start analysis') || title.includes('start analysis') || el.dataset.action === 'start-analysis';
+          return txt.includes('start analysis') || txt.includes('start differs analysis') || title.includes('start analysis') || title.includes('start differs analysis') || el.dataset.action === 'start-analysis';
         });
       }
       elems.forEach(el=>{

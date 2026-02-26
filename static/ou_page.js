@@ -5,7 +5,7 @@
     try {
       const x = Number(v);
       if (!Number.isFinite(x) || x <= 0) return "-";
-      return new Date(x * 1000).toLocaleTimeString();
+      return new Date(x * 1000).toLocaleString();
     } catch (_) { return "-"; }
   }
   function esc(s) {
@@ -17,8 +17,8 @@
       .replace(/'/g, "&#39;");
   }
 
-  let lastOU = null;
   let eventRows = [];
+  let ouEnabled = false;
 
   function addEvent(text) {
     eventRows.unshift({ t: Date.now(), text: String(text || "") });
@@ -47,13 +47,24 @@
     return r.json();
   }
 
+  function setOuButtonState(isRunning) {
+    ouEnabled = !!isRunning;
+    const btn = q("btnOuToggle");
+    const pill = q("ouStatusPill");
+    if (btn) {
+      btn.textContent = ouEnabled ? "Stop Over/Under Analysis" : "Start Over/Under Analysis";
+    }
+    if (pill) {
+      pill.textContent = ouEnabled ? "OU analysis: running" : "OU analysis: stopped";
+      pill.className = ouEnabled ? "pill ok" : "pill";
+    }
+  }
+
   function pickBestSymbol(symbols) {
     let best = null;
     (symbols || []).forEach(function (s) {
       if (!s || !s.best) return;
       const b = s.best;
-      const pass = !!b.pass_edge;
-      if (!pass) return;
       const score = Number(b.ev_per_stake || -999);
       if (!best || score > Number(best.best.ev_per_stake || -999)) best = s;
     });
@@ -61,14 +72,14 @@
   }
 
   function renderOU(ou) {
-    lastOU = ou || null;
     const settings = (ou && ou.settings) || {};
     const symbols = (ou && ou.symbols) || [];
     const signals = (ou && ou.signals) || [];
     const bestSym = pickBestSymbol(symbols);
     const pending = settings.pending_prediction_id || "-";
 
-    q("sEngine").textContent = settings.enabled ? "RUNNING" : "DISABLED";
+    setOuButtonState(!!settings.enabled);
+    q("sEngine").textContent = settings.enabled ? "RUNNING" : "STOPPED";
     q("sEngine").className = settings.enabled ? "v ok" : "v";
     q("sBest").textContent = bestSym ? (bestSym.symbol + " | " + (bestSym.best.name || "-")) : "-";
     q("sPending").textContent = pending;
@@ -76,14 +87,14 @@
 
     const tbody = q("analysisTable").querySelector("tbody");
     if (!symbols.length) {
-      tbody.innerHTML = '<tr><td colspan="6">No symbol analysis yet. Start ticks first.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6">No symbol analysis yet. Start ticks and OU analysis.</td></tr>';
     } else {
       tbody.innerHTML = symbols.map(function (s) {
         const b = s.best || {};
         return "<tr>" +
           "<td>" + esc(s.symbol || "-") + "</td>" +
           "<td>" + Number(s.samples || 0) + "</td>" +
-          "<td>" + esc(b.name || "-") + "</td>" +
+          "<td>" + esc(b.name || "-") + (b.pass_edge ? "" : " (best)") + "</td>" +
           "<td>" + n(b.p_hat, 4) + "</td>" +
           "<td>" + n(b.p_be, 4) + "</td>" +
           "<td>" + n(b.ev_per_stake, 4) + "</td>" +
@@ -111,35 +122,82 @@
       const e = (r && r.entry) || {};
       const c = String(e.contract_type || r.contract_type || "").toUpperCase();
       return c === "DIGITOVER" || c === "DIGITUNDER" || String(e.prediction_mode || "").toLowerCase() === "ou_focus";
-    }).slice(0, 40);
+    }).slice(0, 80);
     if (!filtered.length) {
       body.innerHTML = '<tr><td colspan="7">No OU settlements yet.</td></tr>';
       return;
     }
     body.innerHTML = filtered.map(function (r) {
       const e = (r && r.entry) || {};
+      const conf = r.conf ?? r.confidence ?? e.confidence;
       return "<tr>" +
         "<td>" + ts(r.ts || e.timestamp) + "</td>" +
         "<td>" + esc(r.market || e.symbol || "-") + "</td>" +
-        "<td>" + esc(e.contract_type || "-") + "</td>" +
-        "<td>" + esc(r.pred != null ? r.pred : e.prediction_digit) + "</td>" +
-        "<td>" + esc(r.actual != null ? r.actual : e.actual) + "</td>" +
+        "<td>" + esc((e.contract_type || r.contract_type || "-").toUpperCase()) + "</td>" +
         "<td>" + esc((r.result || e.result || "-").toUpperCase()) + "</td>" +
         "<td>" + n((r.profit != null ? r.profit : e.profit), 4) + "</td>" +
+        "<td>" + (conf == null ? "-" : n(conf, 4)) + "</td>" +
+        "<td>" + esc(r.id || e.prediction_id || "-") + "</td>" +
         "</tr>";
     }).join("");
+  }
+
+  function normalizeBalance(raw) {
+    try {
+      if (!raw) return null;
+      if (typeof raw === "number") return { amount: raw, currency: "" };
+      if (typeof raw.balance === "number") return { amount: raw.balance, currency: raw.currency || "" };
+      if (raw.balance && typeof raw.balance === "object") {
+        return { amount: raw.balance.balance, currency: raw.balance.currency || "" };
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function refreshBalances() {
+    try {
+      const [demo, real] = await Promise.all([
+        getJSON("/control/get_balances?mode=demo"),
+        getJSON("/control/get_balances?mode=real"),
+      ]);
+      const d = normalizeBalance((demo && demo.balance) || null);
+      const r = normalizeBalance((real && real.balance) || null);
+      q("sDemoBal").textContent = d ? `${Number(d.amount).toFixed(2)} ${d.currency || ""}`.trim() : "-";
+      q("sRealBal").textContent = r ? `${Number(r.amount).toFixed(2)} ${r.currency || ""}`.trim() : "-";
+    } catch (_) {}
   }
 
   async function refresh() {
     try {
       const [ouRes, jr] = await Promise.all([
         getJSON("/control/ou_status?symbols=24&signals=60"),
-        getJSON("/control/journal?limit=200"),
+        getJSON("/control/journal?limit=240"),
       ]);
       if (ouRes && ouRes.ok) renderOU(ouRes.ou || null);
       if (jr && jr.ok) renderJournal(jr.entries || []);
     } catch (e) {
       addEvent("refresh error: " + String((e && e.message) || e));
+    }
+    refreshBalances();
+  }
+
+  async function toggleOu() {
+    const btn = q("btnOuToggle");
+    if (!btn) return;
+    btn.disabled = true;
+    try {
+      if (ouEnabled) {
+        await postJSON("/control/ou_stop", {});
+      } else {
+        await postJSON("/control/ou_start", {});
+      }
+      await refresh();
+    } catch (e) {
+      addEvent("toggle error: " + String((e && e.message) || e));
+    } finally {
+      btn.disabled = false;
     }
   }
 
@@ -150,9 +208,9 @@
         try {
           const p = JSON.parse(ev.data || "{}");
           const ae = String(p.analysis_event || "").toLowerCase();
-          if (ae === "ou_analysis" || ae === "ou_signal" || ae === "prediction_result") {
+          if (ae === "ou_analysis" || ae === "ou_signal" || ae === "prediction_result" || ae === "ou_status") {
             addEvent(ae + " | " + (p.symbol || p.market || ""));
-            if (ae === "prediction_result") refresh();
+            if (ae === "prediction_result" || ae === "ou_signal" || ae === "ou_status") refresh();
           }
         } catch (_) {}
       });
@@ -163,10 +221,8 @@
   }
 
   (async function init() {
-    try {
-      // Force automatic mode for this OU workflow.
-      await postJSON("/control/ou_settings", { enabled: true, auto_predict: true });
-    } catch (_) {}
+    const btn = q("btnOuToggle");
+    if (btn) btn.addEventListener("click", toggleOu);
     attachSSE();
     refresh();
     setInterval(refresh, 2500);

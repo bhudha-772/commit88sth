@@ -1,9 +1,9 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>HeroX — RDBEAR Live Chart (debug)</title>
+  <title>HeroX â€” RDBEAR Live Chart (debug)</title>
 
   <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -124,10 +124,10 @@
 <body>
 <div class="topbar">
   <div style="display:flex;gap:12px;align-items:center">
-    <h1>HeroX — RDBEAR Chart (debug)</h1>
+    <h1>HeroX â€” RDBEAR Chart (debug)</h1>
 
     <!-- single Start/Stop toggle -->
-    <button id="startStop" class="btn primary">Start Charts</button>
+    <button id="startStop" class="btn primary">Start Higher-Lower Analysis</button>
 
     <button id="back" class="btn ghost">Dashboard</button>
 
@@ -174,7 +174,7 @@
     </div>
 
   </div>
-  <div style="font-size:13px;color:var(--muted)">Live via /events — debug logging ON. Open browser console for more details.</div>
+  <div style="font-size:13px;color:var(--muted)">Live via /events â€” debug logging ON. Open browser console for more details.</div>
 </div>
 
 
@@ -182,11 +182,11 @@
   <div class="panel chart-panel">
     <div style="display:flex;justify-content:space-between;margin-bottom:8px">
       <strong>RDBEAR Price</strong>
-      <span style="color:var(--muted)">x=time • y=price</span>
+      <span style="color:var(--muted)">x=time â€¢ y=price</span>
     </div>
 
     <div id="chart-wrap" style="position:relative">
-      <div id="chart-placeholder" class="placeholder">Waiting for first RDBEAR tick…</div>
+      <div id="chart-placeholder" class="placeholder">Waiting for first RDBEAR tickâ€¦</div>
       <canvas id="chart" height="480" style="display:none"></canvas>
     </div>
   </div>
@@ -194,7 +194,7 @@
   <div class="panel side-panel">
     <div>
       <strong>Stats</strong>
-      <div class="stat">Latest: <span id="latest">—</span></div>
+      <div class="stat">Latest: <span id="latest">â€”</span></div>
       <div class="stat">Points: <span id="count">0</span></div>
       <button id="clear" class="btn" style="margin-top:8px">Clear</button>
     </div>
@@ -210,18 +210,18 @@
         <div id="ind-side-row" style="display:flex;gap:8px;align-items:center;">
           <div id="ind-box-up" style="flex:1;padding:8px;border-radius:8px;border:1px solid rgba(0,0,0,0.04);background:#f8fff9;">
             <div style="font-size:12px;color:#065f46;font-weight:700">UPTREND</div>
-            <div id="ind-up-percent" style="font-weight:900;font-size:20px">—%</div>
+            <div id="ind-up-percent" style="font-weight:900;font-size:20px">â€”%</div>
             <div id="ind-up-status" style="font-size:12px;color:#065f46">HOLD</div>
-            <div id="ind-up-strength" style="font-size:11px;color:#0f172a;opacity:0.75">—</div>
+            <div id="ind-up-strength" style="font-size:11px;color:#0f172a;opacity:0.75">â€”</div>
             <div id="ind-up-timer" style="font-size:11px;color:rgba(0,0,0,0.45)">0s</div>
             <div id="ind-up-note" style="margin-top:6px;font-size:12px;color:#065f46;display:none"></div>
           </div>
 
           <div id="ind-box-down" style="flex:1;padding:8px;border-radius:8px;border:1px solid rgba(0,0,0,0.04);background:#fff7f8;">
             <div style="font-size:12px;color:#7f1d1d;font-weight:700">DOWNTREND</div>
-            <div id="ind-down-percent" style="font-weight:900;font-size:20px">—%</div>
+            <div id="ind-down-percent" style="font-weight:900;font-size:20px">â€”%</div>
             <div id="ind-down-status" style="font-size:12px;color:#7f1d1d">HOLD</div>
-            <div id="ind-down-strength" style="font-size:11px;color:#0f172a;opacity:0.75">—</div>
+            <div id="ind-down-strength" style="font-size:11px;color:#0f172a;opacity:0.75">â€”</div>
             <div id="ind-down-timer" style="font-size:11px;color:rgba(0,0,0,0.45)">0s</div>
             <div id="ind-down-note" style="margin-top:6px;font-size:12px;color:#7f1d1d;display:none"></div>
           </div>
@@ -253,7 +253,7 @@
       </div>
     </div>
     <div class="jr-body">
-      <div id="journalMeta" class="jr-muted">Loading…</div>
+      <div id="journalMeta" class="jr-muted">Loadingâ€¦</div>
       <table class="jr-table">
         <thead>
           <tr>
@@ -475,7 +475,7 @@
             const txt = (function(){
               const val = chart.data.datasets[0].data[meta.data.length - 1];
               const lbl = chart.data.labels[meta.data.length - 1] || '';
-              return `${lbl} • ${Number(val).toFixed(5)}`;
+              return `${lbl} â€¢ ${Number(val).toFixed(5)}`;
             })();
 
             ctx.save();
@@ -613,7 +613,7 @@
   }
 
   // ------------------- HeroX helpers: tick counter & chart-init watcher -------------------
-  // tick counter increments once per addPoint() call — used for tick-based cooldowns
+  // tick counter increments once per addPoint() call â€” used for tick-based cooldowns
   window.__herox_tick_counter = window.__herox_tick_counter || 0;
   // last TAKE tick index (used to enforce N-tick separation)
   window.__herox_last_take_tick = window.__herox_last_take_tick || -9999;
@@ -848,12 +848,12 @@
     const nested = (raw.entry && typeof raw.entry === 'object') ? raw.entry : {};
     return {
       ts: raw.ts || raw.timestamp || nested.timestamp || null,
-      market: raw.market || raw.symbol || nested.symbol || '—',
-      tradeType: raw.trade_type || raw.direction || raw.type || nested.trade_type || nested.direction || '—',
-      result: raw.result || nested.result || '—',
+      market: raw.market || raw.symbol || nested.symbol || 'â€”',
+      tradeType: raw.trade_type || raw.direction || raw.type || nested.trade_type || nested.direction || 'â€”',
+      result: raw.result || nested.result || 'â€”',
       profit: raw.profit ?? nested.profit ?? null,
       conf: raw.conf ?? raw.confidence ?? nested.confidence ?? null,
-      id: raw.id || raw.prediction_id || nested.prediction_id || '—'
+      id: raw.id || raw.prediction_id || nested.prediction_id || 'â€”'
     };
   }
 
@@ -875,12 +875,12 @@
       const tr = document.createElement('tr');
       const dt = e.ts ? new Date(Number(e.ts) * 1000) : null;
       const vals = [
-        dt ? dt.toLocaleString() : '—',
+        dt ? dt.toLocaleString() : 'â€”',
         e.market,
-        String(e.tradeType || '—').toUpperCase(),
-        String(e.result || '—').toUpperCase(),
-        (e.profit === null || e.profit === undefined || Number.isNaN(Number(e.profit))) ? '—' : Number(e.profit).toFixed(2),
-        (e.conf === null || e.conf === undefined || Number.isNaN(Number(e.conf))) ? '—' : `${(Number(e.conf) * 100).toFixed(1)}%`,
+        String(e.tradeType || 'â€”').toUpperCase(),
+        String(e.result || 'â€”').toUpperCase(),
+        (e.profit === null || e.profit === undefined || Number.isNaN(Number(e.profit))) ? 'â€”' : Number(e.profit).toFixed(2),
+        (e.conf === null || e.conf === undefined || Number.isNaN(Number(e.conf))) ? 'â€”' : `${(Number(e.conf) * 100).toFixed(1)}%`,
         e.id
       ];
       vals.forEach(v => {
@@ -895,7 +895,7 @@
 
   async function loadJournal(){
     try {
-      if(journalMeta) journalMeta.textContent = 'Loading…';
+      if(journalMeta) journalMeta.textContent = 'Loadingâ€¦';
       const r = await fetch('/control/journal?limit=120', { headers: { 'Accept': 'application/json' } });
       const j = await r.json().catch(()=>null);
       const entries = (j && Array.isArray(j.entries)) ? j.entries : [];
@@ -936,20 +936,17 @@
     } catch(e){ rawLog({__err:'post_failed', url, e: String(e)}); errorConsole("post_failed", url, e); return null; }
   }
 
-  // Hook up Start/Stop properly (single toggling button)
+  // Hook up Start/Stop Higher-Lower analysis (tick stream stays independent).
   const startStopBtn = document.getElementById('startStop');
-  let chartsRunning = false;
+  let hlAnalysisRunning = false;
+  window.__hlAnalysisRunning = false;
   async function startCharts(){
     try {
       startStopBtn.disabled = true;
-      const resp = await post('/control/start_ticks', { symbols: [SYMBOL] });
-      rawLog({__meta:'start_resp', resp});
-      debugConsole("start_ticks resp", resp);
-      // ensure SSE is running and chart-init watcher is active
-      startSSE();
-      startChartInitWatcher();
-      chartsRunning = true;
-      startStopBtn.textContent = 'Stop Charts';
+      hlAnalysisRunning = true;
+      window.__hlAnalysisRunning = true;
+      startStopBtn.textContent = 'Stop Higher-Lower Analysis';
+      rawLog({__meta:'hl_analysis_started', symbol: SYMBOL});
     } finally {
       startStopBtn.disabled = false;
     }
@@ -957,52 +954,31 @@
   async function stopCharts(){
     try {
       startStopBtn.disabled = true;
-      const resp = await post('/control/stop_ticks', { symbols: [SYMBOL] });
-      rawLog({__meta:'stop_resp', resp});
-      debugConsole("stop_ticks resp", resp);
-      // stop receiving new events & cancel any chart init watcher
-      stopSSE();
-      stopChartInitWatcher();
+      hlAnalysisRunning = false;
+      window.__hlAnalysisRunning = false;
+      rawLog({__meta:'hl_analysis_stopped', symbol: SYMBOL});
+      if (window.clearTradePending) window.clearTradePending('analysis_stopped');
     } finally {
       startStopBtn.disabled = false;
-      // clear chart and UI
-      buffer.length = 0;
-      if(window.heroChart){
-        try {
-          window.heroChart.data.labels = [];
-          window.heroChart.data.datasets[0].data = [];
-          window.heroChart.update();
-        } catch(e){}
-      } else {
-        placeholder.style.display = '';
-        canvas.style.display = 'none';
-      }
-      latestEl.textContent = '—';
-      countEl.textContent = '0';
-      const vs = document.getElementById('ind-side-values'); if(vs) vs.textContent = 'Waiting for data…';
-      const tr = document.getElementById('ind-side-trend'); if(tr) tr.textContent = 'Trend: —';
-      const ic = document.getElementById('ind-side-icon'); if(ic){ ic.className = 'ind-neutral'; ic.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="2" y="11" width="20" height="2" rx="1" fill="#374151"></rect></svg>'; }
-      chartsRunning = false;
-      startStopBtn.textContent = 'Start Charts';
+      startStopBtn.textContent = 'Start Higher-Lower Analysis';
     }
   }
 
   startStopBtn.addEventListener('click', function(){
     try {
-      if(!chartsRunning) startCharts();
+      if(!window.__hlAnalysisRunning) startCharts();
       else stopCharts();
     } catch(e){ errorConsole("startStop click error", e); }
   });
-
-  // Clear button
+// Clear button
   document.getElementById('clear').onclick = () => {
     buffer.length = 0;
     if(window.heroChart){ window.heroChart.data.labels=[]; window.heroChart.data.datasets[0].data=[]; window.heroChart.update(); }
     else { placeholder.style.display = ''; canvas.style.display = 'none'; }
-    latestEl.textContent = '—';
+    latestEl.textContent = 'â€”';
     countEl.textContent = '0';
-    const vs = document.getElementById('ind-side-values'); if(vs) vs.textContent = 'Waiting for data…';
-    const tr = document.getElementById('ind-side-trend'); if(tr) tr.textContent = 'Trend: —';
+    const vs = document.getElementById('ind-side-values'); if(vs) vs.textContent = 'Waiting for dataâ€¦';
+    const tr = document.getElementById('ind-side-trend'); if(tr) tr.textContent = 'Trend: â€”';
     const ic = document.getElementById('ind-side-icon'); if(ic){ ic.className = 'ind-neutral'; ic.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="2" y="11" width="20" height="2" rx="1" fill="#374151"></rect></svg>'; }
   };
   document.getElementById('back').onclick = () => { window.location.href = '/'; };
@@ -1087,7 +1063,7 @@
       if (!window.__herox_trade_gate.pending) return;
       if (window.__herox_trade_gate.prediction_id && pid && String(window.__herox_trade_gate.prediction_id) !== String(pid)) return;
       clearTradePending(result || 'SETTLED');
-      appendTradeGateLog(`Previous trade settled (${result || 'SETTLED'}) • new trades enabled`);
+      appendTradeGateLog(`Previous trade settled (${result || 'SETTLED'}) â€¢ new trades enabled`);
     } catch (e) {}
   }
 
@@ -1251,7 +1227,7 @@
 <!-- Indicator engine: computeIndicatorsFromBuffer + voteSignal (must run before the indicator loop) -->
 <script>
 /* ---------- Indicator engine: computeIndicatorsFromBuffer + voteSignal ---------- */
-/* (unchanged from your working engine — keeps EMA, MACD hist, ATR, RSI, BB) */
+/* (unchanged from your working engine â€” keeps EMA, MACD hist, ATR, RSI, BB) */
 function sma(values, period) {
   const out = [];
   for (let i = 0; i < values.length; i++) {
@@ -1457,7 +1433,7 @@ function voteSignal(ind, idx) {
 /* ---------- end indicator engine ---------- */
 </script>
 
-<!-- Your existing indicator script (updated to use the engine above and the new prepare→take logic with logs) -->
+<!-- Your existing indicator script (updated to use the engine above and the new prepareâ†’take logic with logs) -->
 <script>
 (function(){
   // replaced whenReady with an always-waiting version (no hard timeout)
@@ -1588,7 +1564,7 @@ function voteSignal(ind, idx) {
           statusEl.style.color = sideStyles.takeColor;
           statusEl.textContent = 'TAKE';
           noteEl.style.display = '';
-          noteEl.textContent = `TAKE • ${new Date().toLocaleTimeString()}`;
+          noteEl.textContent = `TAKE â€¢ ${new Date().toLocaleTimeString()}`;
         } else if (st === 'PREPARE') {
           boxEl.style.background = sideStyles.prepareBg;
           statusEl.style.color = sideStyles.prepareColor;
@@ -1619,6 +1595,9 @@ function voteSignal(ind, idx) {
 
     setInterval(function(){
       try {
+        if (!window.__hlAnalysisRunning) {
+          return;
+        }
         // gate
         if (!Array.isArray(window.buffer) || window.buffer.length < MIN_POINTS_GATE) {
           // helpful debug: show buffer size
@@ -1774,7 +1753,7 @@ function voteSignal(ind, idx) {
             upState.state = 'TAKE';
             upState.since = now;
             lastTakeTs = now;
-            signalLogAppend && signalLogAppend(`TAKE HIGHER ${Math.round(percLong*100)}% • conf ${Math.round(conf*100)}%`);
+            signalLogAppend && signalLogAppend(`TAKE HIGHER ${Math.round(percLong*100)}% â€¢ conf ${Math.round(conf*100)}%`);
             console.info("[HEROX] TAKE HIGHER", {percLong, conf, macdHist, atr, macdCrossUp, emaCrossUp});
 
             // send forced trade (force true) regardless of autotrade toggle (as requested)
@@ -1804,7 +1783,7 @@ function voteSignal(ind, idx) {
                   } else {
                     const accepted = !!(r && r.ok && r.json && r.json.ok);
                     const outcome = (r && r.json && (r.json.result || r.json.outcome || r.json.status)) ? String(r.json.result || r.json.outcome || r.json.status).toUpperCase() : 'PENDING';
-                    signalLogAppend(`Autotrade HIGHER ${accepted ? 'accepted' : 'failed'} (HTTP ${r ? r.status : 'no-caller'}) • outcome ${outcome}`);
+                    signalLogAppend(`Autotrade HIGHER ${accepted ? 'accepted' : 'failed'} (HTTP ${r ? r.status : 'no-caller'}) â€¢ outcome ${outcome}`);
                   }
                 }
               } catch (e) {
@@ -1835,7 +1814,7 @@ function voteSignal(ind, idx) {
             downState.state = 'TAKE';
             downState.since = now;
             lastTakeTs = now;
-            signalLogAppend && signalLogAppend(`TAKE LOWER ${Math.round(percShort*100)}% • conf ${Math.round(conf*100)}%`);
+            signalLogAppend && signalLogAppend(`TAKE LOWER ${Math.round(percShort*100)}% â€¢ conf ${Math.round(conf*100)}%`);
             console.info("[HEROX] TAKE LOWER", {percShort, conf, macdHist, atr, macdCrossDown, emaCrossDown});
 
             (async function(){
@@ -1864,7 +1843,7 @@ function voteSignal(ind, idx) {
                   } else {
                     const accepted = !!(r && r.ok && r.json && r.json.ok);
                     const outcome = (r && r.json && (r.json.result || r.json.outcome || r.json.status)) ? String(r.json.result || r.json.outcome || r.json.status).toUpperCase() : 'PENDING';
-                    signalLogAppend(`Autotrade LOWER ${accepted ? 'accepted' : 'failed'} (HTTP ${r ? r.status : 'no-caller'}) • outcome ${outcome}`);
+                    signalLogAppend(`Autotrade LOWER ${accepted ? 'accepted' : 'failed'} (HTTP ${r ? r.status : 'no-caller'}) â€¢ outcome ${outcome}`);
                   }
                 }
               } catch (e) {
@@ -2005,5 +1984,6 @@ function voteSignal(ind, idx) {
 
 </body>
 </html>
+
 
 

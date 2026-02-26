@@ -1381,7 +1381,7 @@ def _stop_analysis_process() -> Dict[str, Any]:
             if proc.poll() is None:
                 proc.terminate()
                 try:
-                    proc.wait(timeout=6)
+                    proc.wait(timeout=1.5)
                 except Exception:
                     proc.kill()
                 stopped = True
@@ -2044,14 +2044,15 @@ class OUStrategyEngine:
         self._lock = threading.RLock()
         self.settings_file = os.path.join(LOG_DIR, "ou_strategy_settings.json")
 
-        self.enabled = _truthy(os.environ.get("HERO_OU_ENABLED", "1"))
-        self.auto_predict = _truthy(os.environ.get("HERO_OU_AUTO_PREDICT", "1"))
+        self.enabled = _truthy(os.environ.get("HERO_OU_ENABLED", "0"))
+        self.auto_predict = _truthy(os.environ.get("HERO_OU_AUTO_PREDICT", "0"))
         self.window_size = max(200, int(os.environ.get("HERO_OU_WINDOW_SIZE", "5000")))
-        self.min_samples = max(100, int(os.environ.get("HERO_OU_MIN_SAMPLES", "1200")))
+        self.min_samples = max(100, int(os.environ.get("HERO_OU_MIN_SAMPLES", "600")))
         self.delta = max(0.0, float(os.environ.get("HERO_OU_DELTA", "0.002")))
         self.z_score = max(0.0, float(os.environ.get("HERO_OU_Z", "1.96")))
         self.analyze_interval_sec = max(0.2, float(os.environ.get("HERO_OU_ANALYZE_INTERVAL_SEC", "1.0")))
         self.predict_cooldown_sec = max(1.0, float(os.environ.get("HERO_OU_PREDICT_COOLDOWN_SEC", "12.0")))
+        self.require_strict_edge = _truthy(os.environ.get("HERO_OU_REQUIRE_STRICT_EDGE", "0"))
         self.max_signal_history = max(20, int(os.environ.get("HERO_OU_SIGNAL_HISTORY_MAX", "300")))
 
         focus_env = os.environ.get(
@@ -2084,13 +2085,17 @@ class OUStrategyEngine:
         self.pending_timeout_sec = max(20.0, float(os.environ.get("HERO_OU_PENDING_TIMEOUT_SEC", "120.0")))
 
         self._load_settings()
-        # OU workflow is intended to run fully automatically.
-        self.enabled = True
-        self.auto_predict = True
+        if _truthy(os.environ.get("HERO_OU_BOOT_DISABLED", "1")):
+            self.enabled = False
+            self.auto_predict = False
+        # OU analysis is opt-in from UI controls.
+        self.enabled = bool(self.enabled)
+        self.auto_predict = bool(self.auto_predict)
         _log(
             "OU engine initialized "
-            f"(enabled={self.enabled} auto_predict={self.auto_predict} window={self.window_size} "
-            f"min_samples={self.min_samples} focus_symbols={len(self.focus_symbols) if self.focus_symbols else 'ALL'})"
+            f"(enabled={self.enabled} auto_predict={self.auto_predict} strict_edge={self.require_strict_edge} "
+            f"window={self.window_size} min_samples={self.min_samples} "
+            f"focus_symbols={len(self.focus_symbols) if self.focus_symbols else 'ALL'})"
         )
 
     def _parse_focus_symbols(self, raw: Any) -> set:
@@ -2197,7 +2202,11 @@ class OUStrategyEngine:
     def _signal_row_from_snapshot(self, snapshot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         try:
             best = snapshot.get("best") or {}
-            if not best.get("pass_edge"):
+            samples = int(best.get("samples") or snapshot.get("samples") or 0)
+            if samples < self.min_samples:
+                return None
+            pass_edge = bool(best.get("pass_edge"))
+            if not pass_edge and self.require_strict_edge:
                 return None
             return {
                 "ts": int(time.time()),
@@ -2206,11 +2215,13 @@ class OUStrategyEngine:
                 "contract": str(best.get("name") or ""),
                 "contract_type": str(best.get("contract_type") or ""),
                 "barrier": str(best.get("barrier") or ""),
-                "samples": int(best.get("samples") or snapshot.get("samples") or 0),
+                "samples": samples,
                 "p_hat": float(best.get("p_hat") or 0.0),
                 "p_be": float(best.get("p_be") or 0.0),
                 "lower_ci95": float(best.get("lower_ci95") or 0.0),
                 "ev_per_stake": float(best.get("ev_per_stake") or 0.0),
+                "pass_edge": pass_edge,
+                "signal_basis": ("strict_edge" if pass_edge else "best_available"),
             }
         except Exception:
             return None
@@ -2371,6 +2382,7 @@ class OUStrategyEngine:
                 "z_score": float(self.z_score),
                 "analyze_interval_sec": float(self.analyze_interval_sec),
                 "predict_cooldown_sec": float(self.predict_cooldown_sec),
+                "require_strict_edge": bool(self.require_strict_edge),
                 "focus_symbols": sorted(list(self.focus_symbols)),
                 "total_return": dict(self.total_return),
             }
@@ -2446,6 +2458,9 @@ class OUStrategyEngine:
                     self.predict_cooldown_sec = max(1.0, float(obj.get("predict_cooldown_sec")))
                 except Exception:
                     pass
+            if "require_strict_edge" in obj:
+                v = obj.get("require_strict_edge")
+                self.require_strict_edge = v if isinstance(v, bool) else _truthy(v)
             if "focus_symbols" in obj:
                 self.focus_symbols = self._parse_focus_symbols(obj.get("focus_symbols"))
             if "total_return" in obj and isinstance(obj.get("total_return"), dict):
@@ -2468,10 +2483,6 @@ class OUStrategyEngine:
                 self.pending_symbol = None
                 self.pending_since = 0.0
                 self.buffers = defaultdict(lambda: deque(maxlen=self.window_size))
-            # Keep OU engine in automatic mode.
-            self.enabled = True
-            self.auto_predict = True
-
         if persist:
             self._save_settings()
         snap = self.status_snapshot()
@@ -2516,6 +2527,26 @@ def control_ou_settings():
         return jsonify({"ok": True, "ou": snap})
     except Exception as e:
         _err(f"control_ou_settings error: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/control/ou_start", methods=["POST"])
+def control_ou_start():
+    try:
+        snap = OU_ENGINE.apply_settings({"enabled": True, "auto_predict": True}, persist=True)
+        return jsonify({"ok": True, "ou": snap})
+    except Exception as e:
+        _err(f"control_ou_start error: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/control/ou_stop", methods=["POST"])
+def control_ou_stop():
+    try:
+        snap = OU_ENGINE.apply_settings({"enabled": False, "auto_predict": False}, persist=True)
+        return jsonify({"ok": True, "ou": snap})
+    except Exception as e:
+        _err(f"control_ou_stop error: {e}")
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
@@ -3310,10 +3341,16 @@ def control_stop_analysis():
             errors.extend(stop_res.get("notes") or [])
 
         # best-effort legacy cleanup for tmux/linux deployments
-        try:
-            subprocess.run(["tmux", "kill-session", "-t", sess], check=False)
-        except Exception as e:
-            errors.append(f"tmux_kill: {e}")
+        if os.name != "nt":
+            try:
+                subprocess.run(
+                    ["tmux", "kill-session", "-t", sess],
+                    check=False,
+                    capture_output=True,
+                    timeout=1.0,
+                )
+            except Exception as e:
+                errors.append(f"tmux_kill: {e}")
 
         gone = not _analysis_running()
 
@@ -3503,7 +3540,8 @@ def push_tick():
     except Exception as _outer:
         _err(f"push_tick pre-journal check failed: {_outer}")
 
-    _log(f"push_tick symbol={payload.get('symbol')} epoch={epoch} seq={cur_seq}")
+    if _truthy(os.environ.get("HERO_VERBOSE_TICK_LOG", "0")):
+        _log(f"push_tick symbol={payload.get('symbol')} epoch={epoch} seq={cur_seq}")
     return jsonify({"ok": True})
 
 
@@ -3701,9 +3739,9 @@ if __name__ == "__main__":
         except Exception as e:
             _err(f"failed to start monitor thread: {e}")
 
-        # Auto-start differs agent so only hero_service.py needs to be launched.
+        # Optional auto-start differs agent (disabled by default).
         try:
-            if str(os.environ.get("HERO_AUTO_START_ANALYSIS", "1")).strip().lower() in ("1", "true", "yes", "on"):
+            if str(os.environ.get("HERO_AUTO_START_ANALYSIS", "0")).strip().lower() in ("1", "true", "yes", "on"):
                 push_url = os.environ.get("HERO_DASHBOARD_PUSH_URL") or f"http://127.0.0.1:{port}/control/push_tick"
                 res = _start_analysis_process(push_url)
                 if not res.get("ok"):

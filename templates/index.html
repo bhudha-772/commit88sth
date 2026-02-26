@@ -156,11 +156,11 @@
         </div>
 
         <div id="derivStatus" class="status-pill">Deriv: stopped</div>
-        <div id="analysisStatus" class="status-pill">Analysis: stopped</div>
+        <div id="analysisStatus" class="status-pill">Differs: stopped</div>
 
         <button id="btnToggleBalances" class="btn" title="Toggle balances">Toggle Balances</button>
         <button id="btnStartDeriv" class="btn btn-glow">Start Deriv</button>
-        <button id="btnStartAnalysis" class="btn btn-glow">Start Analysis</button>
+        <button id="btnStartAnalysis" class="btn btn-glow">Start Differs Analysis</button>
       </div>
 
       <button id="journal-header-btn" title="Open Prediction Journal" aria-label="Open Prediction Journal" class="header-btn">
@@ -229,7 +229,7 @@
         </div>
         <div class="controls">
           <div id="derivStatus_inner" class="status-pill">Deriv: stopped</div>
-          <div id="analysisStatus_inner" class="status-pill">Analysis: stopped</div>
+          <div id="analysisStatus_inner" class="status-pill">Differs: stopped</div>
         </div>
 
         <!-- prediction produced counter (badge) -->
@@ -331,7 +331,7 @@
             </div>
 
             <div style="font-size:13px;color:var(--muted);margin-bottom:8px">
-              Use Start Deriv to start tick worker which posts ticks to the server. Use Start Analysis to run the adaptive analysis agent.
+              Use Start Deriv to start tick worker which posts ticks to the server. Use Start Differs Analysis to run the adaptive differs agent.
             </div>
 
             <div class="col" style="gap:6px">
@@ -916,8 +916,8 @@
       let analysisRunning = false;
 
       // New behavior:
-      // - Click Start Analysis => POST /control/start_analysis, update UI only after success
-      // - Click Stop Analysis => POST /control/stop_analysis, update UI only after success
+      // - Click Start Differs Analysis => POST /control/start_analysis, update UI only after success
+      // - Click Stop Differs Analysis => POST /control/stop_analysis, update UI only after success
       btnStartAnalysis.addEventListener('click', async ()=> {
         if (btnStartAnalysis._op_in_flight) return;
         btnStartAnalysis._op_in_flight = true;
@@ -930,22 +930,22 @@
               const res = await fetch('/control/stop_analysis', { method: 'POST' });
               if(res.status === 403){
                 alert('Stop analysis forbidden (server requires admin access).');
-                btnStartAnalysis.textContent = 'Stop Analysis';
+                btnStartAnalysis.textContent = 'Stop Differs Analysis';
                 return;
               }
               const j = await res.json().catch(()=>({ok:false}));
               if (res.ok && j.ok) {
                 analysisRunning = false;
-                analysisStatus.textContent = 'Analysis: stopped';
-                btnStartAnalysis.textContent = 'Start Analysis';
+                analysisStatus.textContent = 'Differs: stopped';
+                btnStartAnalysis.textContent = 'Start Differs Analysis';
               } else {
                 const err = (j && (j.error || j.message)) || `status ${res.status}`;
                 alert('Stop analysis failed: ' + err);
-                btnStartAnalysis.textContent = 'Stop Analysis';
+                btnStartAnalysis.textContent = 'Stop Differs Analysis';
               }
             } catch (e) {
               alert('Stop analysis error: ' + (e && e.message ? e.message : e));
-              btnStartAnalysis.textContent = 'Stop Analysis';
+              btnStartAnalysis.textContent = 'Stop Differs Analysis';
             } finally {
               btnStartAnalysis.disabled = false;
             }
@@ -966,16 +966,16 @@
               const err = (j && (j.error || j.message)) || `status ${res.status}`;
               alert('Start analysis failed: ' + err);
               btnStartAnalysis.disabled = false;
-              btnStartAnalysis.textContent = 'Start Analysis';
+              btnStartAnalysis.textContent = 'Start Differs Analysis';
               return;
             }
             analysisRunning = true;
-            analysisStatus.textContent = 'Analysis: running';
-            btnStartAnalysis.textContent = 'Stop Analysis';
-            // Do not open overlay automatically — only user opens overlay via icon or Start Analysis (we keep overlay closed)
+            analysisStatus.textContent = 'Differs: running';
+            btnStartAnalysis.textContent = 'Stop Differs Analysis';
+            // Do not open overlay automatically — only user opens overlay via icon.
           } catch(e){
             alert('Error starting analysis: ' + (e && e.message ? e.message : e));
-            btnStartAnalysis.textContent = 'Start Analysis';
+            btnStartAnalysis.textContent = 'Start Differs Analysis';
           } finally {
             try { btnStartAnalysis.disabled = false; } catch(e){}
           }
@@ -1710,7 +1710,157 @@
   })();
   </script>
 
-  {% include "_journal.html" %}
+  <style>
+    .jr-modal{position:fixed;inset:0;background:rgba(2,6,23,.42);display:none;align-items:center;justify-content:center;z-index:120000}
+    .jr-modal.open{display:flex}
+    .jr-panel{width:min(1100px,94vw);max-height:84vh;overflow:auto;background:#fff;border-radius:12px;padding:12px;border:1px solid rgba(2,6,23,.1);box-shadow:0 24px 70px rgba(2,6,23,.28)}
+    .jr-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+    .jr-head .ttl{font-weight:800}
+    .jr-table{width:100%;border-collapse:collapse;font-size:12px}
+    .jr-table th,.jr-table td{padding:8px 6px;text-align:left;border-bottom:1px solid rgba(2,6,23,.08)}
+    .jr-table th{font-size:11px;color:#475569}
+    .jr-muted{font-size:12px;color:#64748b}
+  </style>
+  <div id="journalModal" class="jr-modal" aria-hidden="true">
+    <div class="jr-panel" role="dialog" aria-modal="true" aria-label="Prediction Journal">
+      <div class="jr-head">
+        <div class="ttl">Prediction Journal</div>
+        <div style="display:flex;gap:8px">
+          <button id="journalRefreshBtn" class="btn" style="padding:6px 10px">Refresh</button>
+          <button id="journalCloseBtn" class="btn" style="padding:6px 10px">Close</button>
+        </div>
+      </div>
+      <div id="journalMeta" class="jr-muted">Loading…</div>
+      <table class="jr-table" style="margin-top:8px">
+        <thead>
+          <tr>
+            <th>ts</th>
+            <th>market</th>
+            <th>type</th>
+            <th>pred</th>
+            <th>actual</th>
+            <th>result</th>
+            <th>profit</th>
+            <th>confidence</th>
+            <th>id</th>
+          </tr>
+        </thead>
+        <tbody id="journalRows"></tbody>
+      </table>
+    </div>
+  </div>
+  <script>
+  (function(){
+    const journalBtn = document.getElementById('journal-header-btn');
+    const journalModal = document.getElementById('journalModal');
+    const journalRows = document.getElementById('journalRows');
+    const journalMeta = document.getElementById('journalMeta');
+    const journalCloseBtn = document.getElementById('journalCloseBtn');
+    const journalRefreshBtn = document.getElementById('journalRefreshBtn');
+
+    function normJournalEntry(e){
+      const raw = (e && typeof e === 'object') ? e : {};
+      const nested = (raw.entry && typeof raw.entry === 'object') ? raw.entry : {};
+      const ts = raw.ts || raw.timestamp || nested.timestamp || null;
+      const pred = raw.pred ?? raw.prediction_digit ?? nested.prediction_digit ?? null;
+      const actual = raw.actual ?? nested.actual ?? null;
+      const contractType = raw.contract_type || nested.contract_type || raw.trade_type || raw.direction || nested.trade_type || nested.direction || '—';
+      const result = raw.result || nested.result || '—';
+      const conf = raw.conf ?? raw.confidence ?? nested.confidence ?? null;
+      const profit = raw.profit ?? nested.profit ?? null;
+      return {
+        ts,
+        market: raw.market || raw.symbol || nested.symbol || '—',
+        contractType: String(contractType || '—').toUpperCase(),
+        pred,
+        actual,
+        result: String(result || '—').toUpperCase(),
+        profit,
+        conf,
+        id: raw.id || raw.prediction_id || nested.prediction_id || '—'
+      };
+    }
+
+    function renderJournal(entries){
+      if(!journalRows) return;
+      journalRows.innerHTML = '';
+      if(!Array.isArray(entries) || entries.length === 0){
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 9;
+        td.textContent = 'No journal entries yet.';
+        tr.appendChild(td);
+        journalRows.appendChild(tr);
+        if(journalMeta) journalMeta.textContent = '0 entries';
+        return;
+      }
+      entries.forEach((x) => {
+        const e = normJournalEntry(x);
+        const tr = document.createElement('tr');
+        const dt = e.ts ? new Date(Number(e.ts) * 1000) : null;
+        const vals = [
+          dt ? dt.toLocaleString() : '—',
+          e.market,
+          e.contractType,
+          (e.pred === null || e.pred === undefined) ? '—' : String(e.pred),
+          (e.actual === null || e.actual === undefined) ? '—' : String(e.actual),
+          e.result,
+          (e.profit === null || e.profit === undefined || Number.isNaN(Number(e.profit))) ? '—' : Number(e.profit).toFixed(2),
+          (e.conf === null || e.conf === undefined || Number.isNaN(Number(e.conf))) ? '—' : `${(Number(e.conf) * 100).toFixed(1)}%`,
+          e.id
+        ];
+        vals.forEach(v => {
+          const td = document.createElement('td');
+          td.textContent = String(v);
+          tr.appendChild(td);
+        });
+        journalRows.appendChild(tr);
+      });
+      if(journalMeta) journalMeta.textContent = `${entries.length} entries`;
+    }
+
+    async function loadJournal(){
+      try {
+        if(journalMeta) journalMeta.textContent = 'Loading…';
+        const r = await fetch('/control/journal?limit=180', { headers: { 'Accept': 'application/json' } });
+        const j = await r.json().catch(()=>null);
+        const entries = (j && Array.isArray(j.entries)) ? j.entries : [];
+        renderJournal(entries);
+      } catch (e) {
+        renderJournal([]);
+        if(journalMeta) journalMeta.textContent = `Journal load failed: ${String(e && e.message ? e.message : e)}`;
+      }
+    }
+
+    function openJournal(){
+      if(!journalModal) return;
+      journalModal.classList.add('open');
+      journalModal.setAttribute('aria-hidden', 'false');
+      loadJournal();
+    }
+    function closeJournal(){
+      if(!journalModal) return;
+      journalModal.classList.remove('open');
+      journalModal.setAttribute('aria-hidden', 'true');
+    }
+
+    if(journalBtn) journalBtn.addEventListener('click', openJournal);
+    if(journalCloseBtn) journalCloseBtn.addEventListener('click', closeJournal);
+    if(journalRefreshBtn) journalRefreshBtn.addEventListener('click', loadJournal);
+    if(journalModal) journalModal.addEventListener('click', (e) => { if(e.target === journalModal) closeJournal(); });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && journalModal && journalModal.classList.contains('open')) closeJournal();
+    });
+
+    // Lightweight live refresh only on settlement events.
+    try {
+      const es = new EventSource('/events');
+      es.addEventListener('prediction_result', function(){
+        if(journalModal && journalModal.classList.contains('open')) loadJournal();
+      });
+    } catch(_) {}
+  })();
+  </script>
 
   <script>
   (function(){

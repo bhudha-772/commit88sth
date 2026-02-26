@@ -9,14 +9,19 @@
     * { box-sizing:border-box; }
     body { margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear-gradient(180deg,#f8fafc,#ffffff); color:var(--fg); }
     .wrap { max-width:1280px; margin:18px auto; padding:0 14px 18px; }
-    .top { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:12px; }
+    .top { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin-bottom:12px; }
     .top h1 { margin:0; font-size:22px; }
-    .links { display:flex; gap:10px; align-items:center; }
+    .sub { color:var(--muted); font-size:12px; margin-top:4px; }
+    .links { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
     .links a { color:#0f172a; text-decoration:none; border:1px solid var(--line); border-radius:10px; padding:7px 10px; background:#fff; }
-    .grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-bottom:10px; }
+    .btn { border:1px solid var(--line); background:#fff; color:#0f172a; border-radius:10px; padding:8px 12px; cursor:pointer; font-weight:700; }
+    .btn.primary { background:#0f172a; color:#fff; border-color:#0f172a; }
+    .pill { border-radius:999px; border:1px solid var(--line); padding:6px 10px; font-size:12px; background:#fff; }
+    .pill.ok { color:var(--ok); border-color:rgba(22,101,52,.35); background:rgba(22,101,52,.08); }
+    .grid { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px; margin-bottom:10px; }
     .card { border:1px solid var(--line); border-radius:12px; padding:10px; background:#fff; box-shadow:0 8px 24px rgba(2,6,23,.05); }
     .k { font-size:12px; color:var(--muted); }
-    .v { margin-top:4px; font-size:18px; font-weight:800; }
+    .v { margin-top:4px; font-size:17px; font-weight:800; }
     .v.ok { color:var(--ok); }
     .layout { display:grid; grid-template-columns:1.2fr 1fr; gap:10px; }
     .tbl { width:100%; border-collapse:collapse; font-size:12px; }
@@ -25,8 +30,8 @@
     .mono { font-family:ui-monospace,Consolas,monospace; }
     .feed { max-height:260px; overflow:auto; font-size:12px; }
     .feed .row { border-bottom:1px dashed rgba(2,6,23,.12); padding:6px 2px; }
-    .sub { color:var(--muted); font-size:12px; margin-top:4px; }
-    @media (max-width:1100px) { .grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .layout { grid-template-columns:1fr; } }
+    @media (max-width:1180px) { .grid { grid-template-columns:repeat(3,minmax(0,1fr)); } .layout { grid-template-columns:1fr; } }
+    @media (max-width:720px) { .grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
   </style>
 </head>
 <body>
@@ -34,11 +39,13 @@
     <div class="top">
       <div>
         <h1>Digit Over/Under Auto Trader</h1>
-        <div class="sub">Automatic mode: analyzes all focused markets, picks strongest edge, posts prediction, waits for settlement, then continues.</div>
+        <div class="sub">Start Deriv for tick flow. Start OU analysis to scan all focus markets, select best signal, trade, wait settlement, and repeat.</div>
       </div>
       <div class="links">
         <a href="/">Markets</a>
         <a href="/charts">Charts</a>
+        <span id="ouStatusPill" class="pill">OU analysis: stopped</span>
+        <button id="btnOuToggle" class="btn primary">Start Over/Under Analysis</button>
       </div>
     </div>
 
@@ -47,6 +54,8 @@
       <div class="card"><div class="k">Best Market</div><div class="v" id="sBest">-</div></div>
       <div class="card"><div class="k">Outstanding Prediction</div><div class="v" id="sPending">-</div></div>
       <div class="card"><div class="k">Signals / Settled</div><div class="v" id="sStats">-</div></div>
+      <div class="card"><div class="k">Demo Balance</div><div class="v" id="sDemoBal">-</div></div>
+      <div class="card"><div class="k">Real Balance</div><div class="v" id="sRealBal">-</div></div>
     </div>
 
     <div class="layout">
@@ -54,7 +63,7 @@
         <h3 style="margin:0 0 8px 0;">Live Analysis (Top Markets)</h3>
         <table class="tbl" id="analysisTable">
           <thead><tr><th>Symbol</th><th>Samples</th><th>Best Contract</th><th>p</th><th>p_be</th><th>EV</th></tr></thead>
-          <tbody><tr><td colspan="6">Loading...</td></tr></tbody>
+          <tbody><tr><td colspan="6">No symbol analysis yet. Start ticks and OU analysis.</td></tr></tbody>
         </table>
       </div>
       <div class="card">
@@ -65,9 +74,9 @@
 
     <div class="layout" style="margin-top:10px;">
       <div class="card">
-        <h3 style="margin:0 0 8px 0;">Settlements Journal (OU)</h3>
+        <h3 style="margin:0 0 8px 0;">Prediction Journal</h3>
         <table class="tbl" id="settleTable">
-          <thead><tr><th>ts</th><th>market</th><th>contract</th><th>pred</th><th>actual</th><th>result</th><th>profit</th></tr></thead>
+          <thead><tr><th>ts</th><th>market</th><th>type</th><th>result</th><th>profit</th><th>confidence</th><th>id</th></tr></thead>
           <tbody><tr><td colspan="7">Loading...</td></tr></tbody>
         </table>
       </div>
