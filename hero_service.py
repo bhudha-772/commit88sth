@@ -6,7 +6,7 @@ and Deriv account connect/get_balances endpoints (minimal).
 """
 from __future__ import annotations
 
-import os
+import os 
 import time
 import json
 import math
@@ -1304,7 +1304,9 @@ def _analysis_running() -> bool:
     pid = _read_analysis_pid()
     if _is_pid_alive(pid):
         return True
-    return session_exists("differs_agent")
+    if os.name != "nt":
+        return session_exists("differs_agent")
+    return False
 
 
 def _derive_sse_url_from_push(push_url: str) -> str:
@@ -2840,9 +2842,27 @@ def control_journal():
             _err(f"control_journal read error (file): {e}")
             return jsonify({"ok": False, "error": "journal read error"}), 500
 
-    # Default: return session in-memory newest-first
+    # Default: return session in-memory newest-first (fallback to file if empty)
     try:
         results = SESSION_JOURNAL[:limit]
+        if not results:
+            try:
+                file_entries = []
+                if os.path.exists(JOURNAL_FILE):
+                    with open(JOURNAL_FILE, "r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                file_entries.append(json.loads(line))
+                            except Exception:
+                                continue
+                if file_entries:
+                    file_entries = list(reversed(file_entries))[:limit]
+                    results = file_entries
+            except Exception as fe:
+                _err(f"control_journal fallback file read error: {fe}")
         return jsonify({"ok": True, "entries": results})
     except Exception as e:
         _err(f"control_journal read error (session): {e}")
@@ -3352,7 +3372,9 @@ def control_stop_analysis():
             except Exception as e:
                 errors.append(f"tmux_kill: {e}")
 
-        gone = not _analysis_running()
+        gone = bool(stop_res.get("stopped"))
+        if not gone:
+            gone = not _analysis_running()
 
         _log(f"stop_analysis requested; session {sess} attempted kill; verified_gone={gone}")
         try:
@@ -3373,6 +3395,33 @@ def control_stop_analysis():
         return jsonify({"ok": False, "error": str(e), "notes": errors}), 500
 
     return jsonify({"ok": True, "session": sess, "verified_gone": gone, "notes": errors})
+
+
+@app.route("/control/runtime_status", methods=["GET"])
+def control_runtime_status():
+    """
+    Lightweight runtime state so UI can resync button/status text after page switches/reloads.
+    """
+    try:
+        try:
+            deriv_running = bool(worker_manager.is_worker_running())
+        except Exception:
+            deriv_running = session_exists("hero_worker")
+
+        analysis_running = bool(_analysis_running())
+        ou_running = bool(getattr(OU_ENGINE, "enabled", False))
+        return jsonify(
+            {
+                "ok": True,
+                "deriv_running": deriv_running,
+                "analysis_running": analysis_running,
+                "ou_running": ou_running,
+                "analysis_pid": _read_analysis_pid(),
+            }
+        )
+    except Exception as e:
+        _err(f"control_runtime_status failed: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 # NOTE: prediction endpoints removed per user request
 
@@ -3551,8 +3600,11 @@ def _monitor_loop():
     _log("monitor thread started")
     while True:
         try:
-            deriv_here = session_exists("hero_worker")
-            analysis_here = _analysis_running() or session_exists("differs_agent")
+            try:
+                deriv_here = bool(worker_manager.is_worker_running())
+            except Exception:
+                deriv_here = session_exists("hero_worker")
+            analysis_here = _analysis_running()
 
             if deriv_here and not _monitor_state["deriv_prev"]:
                 _log("monitor: deriv session appeared")

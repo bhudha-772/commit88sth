@@ -1,9 +1,9 @@
-<!doctype html>
+﻿<!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>HeroX — Markets</title>
+  <title>HeroX â€” Markets</title>
   <style>
     :root { --bg: #fff; }
     body { margin: 0; font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial; }
@@ -146,8 +146,8 @@
   <div class="wrap">
     <header>
       <div>
-        <h1>HeroX — Markets (click tiles to expand • choose markets in the chooser)</h1>
-        <div style="font-size:13px;color:var(--muted);margin-top:6px">To select markets: click <strong>Start Deriv → Custom</strong>, then tick the markets. Clicking a tile opens the full dashboard overlay.</div>
+        <h1>HeroX â€” Markets (click tiles to expand â€¢ choose markets in the chooser)</h1>
+        <div style="font-size:13px;color:var(--muted);margin-top:6px">To select markets: click <strong>Start Deriv â†’ Custom</strong>, then tick the markets. Clicking a tile opens the full dashboard overlay.</div>
       </div>
 
       <div class="top-controls">
@@ -185,7 +185,7 @@
 
   <!-- Start Deriv chooser modal (small) -->
   <div id="derivChooser" class="modal-chooser" role="dialog" aria-hidden="true" aria-modal="true">
-    <h4>Start Deriv — choose scope</h4>
+    <h4>Start Deriv â€” choose scope</h4>
 
     <div class="chooser-row">
       <label><input type="radio" name="deriv_scope" value="all" checked> All markets</label>
@@ -212,7 +212,7 @@
           <button id="closeOverlayBtn" class="close">Close</button>
         </div>
       </div>
-      <!-- isolated iframe — app.js runs here and cannot touch parent DOM -->
+      <!-- isolated iframe â€” app.js runs here and cannot touch parent DOM -->
       <iframe id="overlayFrame" title="Expanded dashboard" style="width:100%;height:calc(100% - 36px);border:0;border-radius:8px;background:white"></iframe>
     </div>
   </div>
@@ -224,8 +224,8 @@
     <div class="app" id="app">
       <header>
         <div>
-          <h1>HeroX — Live Ticks & Adaptive Analysis</h1>
-          <div style="font-size:12px;color:var(--muted);margin-top:6px;">White background UI • Analysis reads <strong>last_decimal</strong> only (not last_unit)</div>
+          <h1>HeroX â€” Live Ticks & Adaptive Analysis</h1>
+          <div style="font-size:12px;color:var(--muted);margin-top:6px;">White background UI â€¢ Analysis reads <strong>last_decimal</strong> only (not last_unit)</div>
         </div>
         <div class="controls">
           <div id="derivStatus_inner" class="status-pill">Deriv: stopped</div>
@@ -246,7 +246,7 @@
       <div class="col-tick" style="margin-top:12px">
         <div class="panel" id="tickPanel">
           <div class="panel-header">
-            <h3>Tick Panel — last 10 digits</h3>
+            <h3>Tick Panel â€” last 10 digits</h3>
             <div style="display:flex;align-items:center;gap:8px;">
               <button id="btnClearTicks" class="btn">Clear Ticks</button>
               <button id="btnToggleTickList" class="btn">Expand</button>
@@ -260,7 +260,7 @@
             </div>
 
             <div class="tick-meta" id="tickMeta">
-              <span>Buffer (displaying last 10 digits in-panel) • Source: server ticks (last_decimal)</span>
+              <span>Buffer (displaying last 10 digits in-panel) â€¢ Source: server ticks (last_decimal)</span>
             </div>
 
             <div class="tick-list" id="tickList" aria-live="polite" title="Recent ticks (scroll)"></div>
@@ -287,7 +287,7 @@
           <div class="panel-body">
             <div class="main-content" style="flex:1 1 auto; overflow:auto; min-height:0; padding-top:12px;">
               <div class="panel-subheader" style="display:flex;justify-content:space-between;align-items:center">
-                <h4 style="margin:0;font-size:13px">Digits 0–9 (cursor points to last decimal)</h4>
+                <h4 style="margin:0;font-size:13px">Digits 0â€“9 (cursor points to last decimal)</h4>
                 <div class="muted">Current last decimal is highlighted (only when analysis is running)</div>
               </div>
 
@@ -314,7 +314,7 @@
             <div class="muted">Event stream & analysis payloads (overlay-local)</div>
           </div>
           <div class="panel-body">
-            <div class="raw-debug" id="rawDebug">SSE: connecting…</div>
+            <div class="raw-debug" id="rawDebug">SSE: connectingâ€¦</div>
             <div style="margin-top:8px"><button id="btnClearRaw" class="btn">Clear Raw</button></div>
           </div>
         </div>
@@ -336,8 +336,8 @@
 
             <div class="col" style="gap:6px">
               <div class="row"><div class="muted">SSE:</div> <div id="sseState" class="count-bubble">connecting</div></div>
-              <div class="row"><div class="muted">Latest analysis event:</div> <div id="latestAnalysis" class="status-pill">—</div></div>
-              <div class="row"><div class="muted">Last tick digit:</div> <div id="latestTickDigit" class="status-pill">—</div></div>
+              <div class="row"><div class="muted">Latest analysis event:</div> <div id="latestAnalysis" class="status-pill">â€”</div></div>
+              <div class="row"><div class="muted">Last tick digit:</div> <div id="latestTickDigit" class="status-pill">â€”</div></div>
             </div>
           </div>
         </div>
@@ -417,7 +417,7 @@
           const card = document.createElement('div');
           card.className = 'header-balance-card';
           card.id = id;
-          card.innerHTML = `<div style="font-size:11px;color:#6b7280">${label}</div><div class="balance-amount">—</div><div class="balance-meta"> </div>`;
+          card.innerHTML = `<div style="font-size:11px;color:#6b7280">${label}</div><div class="balance-amount">â€”</div><div class="balance-meta"> </div>`;
           return card;
         }
 
@@ -429,9 +429,9 @@
               card = createCard(id, mode === 'real' ? 'Real' : 'Demo');
               containerWrap.appendChild(card);
             }
-            const parsed = parseBalanceObj(obj) || { amount: '—', currency: '' };
-            const amt = parsed.amount === null || parsed.amount === undefined || parsed.amount === '' ? '—' : (typeof parsed.amount === 'number' ? parsed.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : String(parsed.amount));
-            const metaText = parsed.loginid ? (parsed.currency ? parsed.currency + ' • ' + parsed.loginid : parsed.loginid) : (parsed.currency || '');
+            const parsed = parseBalanceObj(obj) || { amount: 'â€”', currency: '' };
+            const amt = parsed.amount === null || parsed.amount === undefined || parsed.amount === '' ? 'â€”' : (typeof parsed.amount === 'number' ? parsed.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : String(parsed.amount));
+            const metaText = parsed.loginid ? (parsed.currency ? parsed.currency + ' â€¢ ' + parsed.loginid : parsed.loginid) : (parsed.currency || '');
             const amtEl = card.querySelector('.balance-amount');
             const metaEl = card.querySelector('.balance-meta');
             if(amtEl) amtEl.textContent = amt;
@@ -612,7 +612,7 @@
           const ts = new Date().toLocaleTimeString();
           const title = document.createElement('div');
           title.className = 'raw-time';
-          title.textContent = `${ts} ${label ? '• ' + label : ''}`;
+          title.textContent = `${ts} ${label ? 'â€¢ ' + label : ''}`;
           const body = document.createElement('div');
           body.className = 'raw-msg';
           try { body.textContent = (typeof payload === 'string') ? payload : JSON.stringify(payload); } catch(e) { body.textContent = String(payload); }
@@ -698,7 +698,7 @@
         panel.innerHTML = `
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <div style="font-weight:800">Universal Raw Debug</div>
-            <div><button id="heroRawClose" style="background:transparent;border:0;color:#fff;cursor:pointer">✕</button></div>
+            <div><button id="heroRawClose" style="background:transparent;border:0;color:#fff;cursor:pointer">âœ•</button></div>
           </div>
           <div class="raw-actions"><button id="heroRawClear">Clear</button><button id="heroRawCollapse">Collapse</button></div>
           <div id="heroRawBody" aria-live="polite"></div>
@@ -750,7 +750,7 @@
             const ts = new Date().toLocaleTimeString();
             const title = document.createElement('div');
             title.className = 'raw-time';
-            title.textContent = `${ts} ${label ? '• ' + label : ''}`;
+            title.textContent = `${ts} ${label ? 'â€¢ ' + label : ''}`;
             const body = document.createElement('div');
             body.className = 'raw-msg';
             try { body.textContent = (typeof payload === 'string') ? payload : JSON.stringify(payload); } catch(e) { body.textContent = String(payload); }
@@ -784,9 +784,9 @@
 
           <div class="market-meta">
             <div class="market-stats">
-              <div class="market-lastdigit" data-last-digit>—</div>
+              <div class="market-lastdigit" data-last-digit>â€”</div>
               <div style="display:flex;flex-direction:column;align-items:flex-start">
-                <div class="market-small" data-last-tick>Last tick: —</div>
+                <div class="market-small" data-last-tick>Last tick: â€”</div>
                 <div class="market-small" style="margin-top:4px" data-last-price> </div>
               </div>
             </div>
@@ -837,8 +837,8 @@
           const lastDigitEl = tile.querySelector('[data-last-digit]');
           const lastTickEl = tile.querySelector('[data-last-tick]');
           const priceEl = tile.querySelector('[data-last-price]');
-          if(lastDigitEl) lastDigitEl.textContent = '—';
-          if(lastTickEl) lastTickEl.textContent = 'Last tick: —';
+          if(lastDigitEl) lastDigitEl.textContent = 'â€”';
+          if(lastTickEl) lastTickEl.textContent = 'Last tick: â€”';
           if(priceEl) priceEl.textContent = '';
         }
       }
@@ -850,6 +850,7 @@
 
       // Controls
       const derivStatus = document.getElementById('derivStatus');
+      const derivStatusInner = document.getElementById('derivStatus_inner');
       const btnStartDeriv = document.getElementById('btnStartDeriv');
 
       let derivRunning = false;
@@ -899,6 +900,7 @@
           derivRunning = false;
           runningSymbols.clear();
           derivStatus.textContent = 'Deriv: stopped';
+          if (derivStatusInner) derivStatusInner.textContent = 'Deriv: stopped';
           btnStartDeriv.textContent = 'Start Deriv';
           setAllTilesRunningForSet(new Set());
         }).catch((err) => {
@@ -912,8 +914,36 @@
       // ---------- Analysis start/stop behavior (single handler) ----------
       const btnStartAnalysis = document.getElementById('btnStartAnalysis');
       const analysisStatus = document.getElementById('analysisStatus');
+      const analysisStatusInner = document.getElementById('analysisStatus_inner');
 
       let analysisRunning = false;
+
+      function applyRuntimeStatus(rt){
+        try {
+          const derivOn = !!(rt && rt.deriv_running);
+          derivRunning = derivOn;
+          if (derivStatus) derivStatus.textContent = derivOn ? 'Deriv: running' : 'Deriv: stopped';
+          if (derivStatusInner) derivStatusInner.textContent = derivOn ? 'Deriv: running' : 'Deriv: stopped';
+          if (btnStartDeriv) btnStartDeriv.textContent = derivOn ? 'Stop Deriv' : 'Start Deriv';
+
+          const analysisOn = !!(rt && rt.analysis_running);
+          analysisRunning = analysisOn;
+          if (analysisStatus) analysisStatus.textContent = analysisOn ? 'Differs: running' : 'Differs: stopped';
+          if (analysisStatusInner) analysisStatusInner.textContent = analysisOn ? 'Differs: running' : 'Differs: stopped';
+          if (btnStartAnalysis && !btnStartAnalysis._op_in_flight) {
+            btnStartAnalysis.textContent = analysisOn ? 'Stop Differs Analysis' : 'Start Differs Analysis';
+          }
+        } catch(e){}
+      }
+
+      async function syncRuntimeStatus(){
+        try {
+          const r = await fetch('/control/runtime_status', { method:'GET' });
+          if (!r.ok) return;
+          const j = await r.json().catch(()=>null);
+          if (j && j.ok) applyRuntimeStatus(j);
+        } catch(e){}
+      }
 
       // New behavior:
       // - Click Start Differs Analysis => POST /control/start_analysis, update UI only after success
@@ -926,7 +956,7 @@
           if (analysisRunning || (btnStartAnalysis.textContent && btnStartAnalysis.textContent.trim().toLowerCase().startsWith('stop'))) {
             try {
               btnStartAnalysis.disabled = true;
-              btnStartAnalysis.textContent = 'Stopping…';
+              btnStartAnalysis.textContent = 'Stoppingâ€¦';
               const res = await fetch('/control/stop_analysis', { method: 'POST' });
               if(res.status === 403){
                 alert('Stop analysis forbidden (server requires admin access).');
@@ -937,6 +967,7 @@
               if (res.ok && j.ok) {
                 analysisRunning = false;
                 analysisStatus.textContent = 'Differs: stopped';
+                if (analysisStatusInner) analysisStatusInner.textContent = 'Differs: stopped';
                 btnStartAnalysis.textContent = 'Start Differs Analysis';
               } else {
                 const err = (j && (j.error || j.message)) || `status ${res.status}`;
@@ -955,7 +986,7 @@
           // START case (directly start; no prompt)
           try {
             btnStartAnalysis.disabled = true;
-            btnStartAnalysis.textContent = 'Starting…';
+            btnStartAnalysis.textContent = 'Startingâ€¦';
             const res = await fetch('/control/start_analysis', {
               method: 'POST',
               headers: {'Content-Type':'application/json'},
@@ -971,8 +1002,9 @@
             }
             analysisRunning = true;
             analysisStatus.textContent = 'Differs: running';
+            if (analysisStatusInner) analysisStatusInner.textContent = 'Differs: running';
             btnStartAnalysis.textContent = 'Stop Differs Analysis';
-            // Do not open overlay automatically — only user opens overlay via icon.
+            // Do not open overlay automatically â€” only user opens overlay via icon.
           } catch(e){
             alert('Error starting analysis: ' + (e && e.message ? e.message : e));
             btnStartAnalysis.textContent = 'Start Differs Analysis';
@@ -1017,6 +1049,7 @@
               const allSet = new Set(allSymbols);
               runningSymbols = new Set(allSet);
               derivStatus.textContent = 'Deriv: starting (background)';
+              if (derivStatusInner) derivStatusInner.textContent = 'Deriv: running';
               btnStartDeriv.textContent = 'Stop Deriv';
               setAllTilesRunningForSet(allSet);
               closeDerivChooser();
@@ -1048,6 +1081,7 @@
             derivRunning = true;
             runningSymbols = new Set(symbols);
             derivStatus.textContent = `Deriv: starting (background)`;
+            if (derivStatusInner) derivStatusInner.textContent = 'Deriv: running';
             btnStartDeriv.textContent = 'Stop Deriv';
             setAllTilesRunningForSet(runningSymbols);
             closeDerivChooser();
@@ -1121,6 +1155,13 @@
         if(!payload) return;
         const maybeSym = ((payload.symbol || payload.market || '') + '').toString().toUpperCase();
         if(maybeSym === 'ANALYSIS' || payload.analysis_event || payload.analysisEvent || payload.market_scores || payload.scores){
+          try {
+            const ae = String(payload.analysis_event || payload.analysisEvent || '').toLowerCase();
+            if (ae === 'deriv_started') applyRuntimeStatus({ deriv_running: true, analysis_running: analysisRunning });
+            else if (ae === 'deriv_stopped') applyRuntimeStatus({ deriv_running: false, analysis_running: analysisRunning });
+            else if (ae === 'analysis_started') applyRuntimeStatus({ deriv_running: derivRunning, analysis_running: true });
+            else if (ae === 'analysis_stopped') applyRuntimeStatus({ deriv_running: derivRunning, analysis_running: false });
+          } catch(e){}
           // cache last analysis payload for overlay replay
           try { window.__hero_last_analysis_payload = payload; } catch(e) {}
           forwardAnalysisPayloadToOverlay(payload);
@@ -1151,6 +1192,7 @@
       function processAnalysisForRaw(p){
         try {
           if(!p) return;
+          const ANALYSIS_RAW_VERBOSE = false;
           const ae = (p.analysis_event || '').toString().toLowerCase();
           // Detect posted predictions
           if(ae === 'prediction_posted' || p.prediction_posted || (p.prediction_digit !== undefined && (p.prediction_time || p.prediction_id || p.analysis_event))){
@@ -1172,8 +1214,8 @@
             return;
           }
 
-          // generic analysis_event logging
-          if(p.analysis_event || p.message){
+          // generic analysis_event logging (disabled unless explicitly debugging)
+          if(ANALYSIS_RAW_VERBOSE && (p.analysis_event || p.message)){
             appendGlobalRaw({ event: p.analysis_event || 'analysis', msg: p.message || p.reason || null, raw: p }, 'ANALYSIS_EVENT');
           }
         } catch(e){ console.error('processAnalysisForRaw err', e); appendGlobalRaw('processAnalysisForRaw err: ' + (e && e.message ? e.message : String(e)), 'ERROR'); }
@@ -1212,7 +1254,7 @@
                   var lastTickEl = t.querySelector('[data-last-tick]');
                   var priceEl = t.querySelector('[data-last-price]');
                   if(last_dec === null || last_dec === "" || last_dec === undefined){
-                    if(lastDigitEl) lastDigitEl.textContent = '—';
+                    if(lastDigitEl) lastDigitEl.textContent = 'â€”';
                   } else {
                     var d = (typeof last_dec === 'number' || /^\d+$/.test(String(last_dec))) ? String(last_dec) : String(last_dec);
                     if(lastDigitEl) lastDigitEl.textContent = d;
@@ -1256,7 +1298,7 @@
         const priceEl = tile.querySelector('[data-last-price]');
 
         if(last_dec === null || last_dec === "" || last_dec === undefined){
-          if(lastDigitEl) lastDigitEl.textContent = '—';
+          if(lastDigitEl) lastDigitEl.textContent = 'â€”';
         } else {
           const d = (typeof last_dec === 'number' || /^\d+$/.test(String(last_dec))) ? String(last_dec) : String(last_dec);
           if(lastDigitEl) lastDigitEl.textContent = d;
@@ -1288,7 +1330,7 @@
 
       function openFullDashboard(market){
         overlaySymbol = (market.code || '').toUpperCase();
-        titleEl.textContent = market.label + ' — ' + market.code;
+        titleEl.textContent = market.label + ' - ' + market.code;
         try { overlayFrame.src = 'about:blank'; } catch(e){}
         overlay.classList.add('visible');
         overlay.removeAttribute('inert');
@@ -1298,12 +1340,27 @@
           if (closeBtn) closeBtn.focus({ preventScroll: true });
         } catch(e){}
 
+        if (overlaySymbol === 'ANALYSIS') {
+          overlayFrame.onload = function(){
+            try {
+              overlayFrame.contentWindow.postMessage({ type: 'iframe_parent_loaded', do_not_auto_start: true }, '*');
+              const cached = window.__hero_last_analysis_payload;
+              if (cached && overlayFrame && overlayFrame.contentWindow) {
+                setTimeout(() => {
+                  try { overlayFrame.contentWindow.postMessage({ type: 'analysis', payload: cached }, '*'); } catch(e){}
+                }, 80);
+              }
+            } catch(e){}
+          };
+          overlayFrame.src = '/analysis_panel.html?_r=' + Date.now();
+          return;
+        }
+
         overlayFrame.onload = function(){
           try {
             const doc = overlayFrame.contentDocument || (overlayFrame.contentWindow && overlayFrame.contentWindow.document);
             if(!doc) return;
 
-            // write base shell first
             doc.open();
             doc.write('<!doctype html><html><head>'
               + '<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -1311,126 +1368,23 @@
               + '</head><body></body></html>');
             doc.close();
 
-            // --- replace the fetch block for ANALYSIS with this ---
-            if (overlaySymbol === 'ANALYSIS') {
-              // load the analysis panel from separate file (server should serve /analysis_panel.html)
-              fetch('/analysis_panel.html').then(resp => resp.text()).then(html => {
-                try {
-                  // Prepend a tiny script that instructs iframe JS not to auto-start analysis.
-                  // This runs before any scripts in analysis_panel.html so the panel can check the flag.
-                  const injected = '<script>window.HERO_IFRAME_DO_NOT_AUTO_START = true; try{ localStorage.setItem(\"HERO_IFRAME_DO_NOT_AUTO_START\",\"1\"); }catch(e){}<\/script>' + html;
-                  doc.open();
-                  doc.write(injected);
-                  doc.close();
+            const tpl = document.getElementById('fullDashboardTemplate');
+            const fragment = tpl.content.cloneNode(true);
+            doc.body.appendChild(fragment);
 
-                  const assistantScript = doc.createElement('script');
-                  assistantScript.src = '/static/hero_assistant_panel.js?_r=' + Date.now();
-                  assistantScript.async = false;
-                  assistantScript.onerror = function(){ /* ignore */ };
-                  doc.body.appendChild(assistantScript);
+            const initScript = document.createElement('script');
+            initScript.type = 'text/javascript';
+            initScript.text = 'window.HERO_INITIAL_MARKET = ' + JSON.stringify(overlaySymbol) + ';';
+            doc.body.appendChild(initScript);
 
-                  // notify iframe parent is loaded — still send the message (backwards-compatible)
-                  try {
-                    overlayFrame.contentWindow.postMessage({ type: 'iframe_parent_loaded', do_not_auto_start: true }, '*');
-                    // replay cached analysis payload for overlay that might have missed earlier events
-                    try {
-                      const cached = window.__hero_last_analysis_payload;
-                      if (cached && overlayFrame && overlayFrame.contentWindow) {
-                        setTimeout(() => {
-                          try {
-                            overlayFrame.contentWindow.postMessage({ type: 'analysis', payload: cached }, '*');
-                          } catch(e){}
-                        }, 80); // short delay to allow iframe listener to attach
-                      }
-                    } catch(e){} 
-                  } catch(e){} 
-                } catch (e) {
-                  console.error('Error injecting analysis panel html', e);
-                }
-              }).catch(err => {
-                console.error('Failed to load /analysis_panel.html', err);
-                try {
-                  doc.open();
-                  doc.write('<div style="padding:12px;font-family:system-ui;">Failed to load analysis panel. Check /analysis_panel.html on the server.</div>');
-                  doc.close();
-                } catch(e){}
-              });
-            } else {
-              const tpl = document.getElementById('fullDashboardTemplate');
-              const fragment = tpl.content.cloneNode(true);
-              doc.body.appendChild(fragment);
-
-              const initScript = document.createElement('script');
-              initScript.type = 'text/javascript';
-              initScript.text = 'window.HERO_INITIAL_MARKET = ' + JSON.stringify(overlaySymbol) + ';';
-              doc.body.appendChild(initScript);
-
-              const bridgeScript = document.createElement('script');
-              bridgeScript.type = 'text/javascript';
-              bridgeScript.text = `/* parent->iframe bridge (minimal) */
-                (function(){
-                  try {
-                    var INITIAL = (window.HERO_INITIAL_MARKET || '').toString().trim().toUpperCase();
-                    var BUF_MAX = 200; var buf = [];
-                    function maybe(id){ return document.getElementById(id) || null; }
-                    function maybeAppendRaw(s){
-                      var rawDebug = maybe('rawDebug'); if(rawDebug){ var el=document.createElement('div'); el.textContent=s; rawDebug.insertBefore(el, rawDebug.firstChild); }
-                    }
-                    window.addEventListener('message', function(ev){
-                      try {
-                        if(!ev.data) return;
-                        if(ev.data.type === 'tick'){
-                          var p = ev.data.payload;
-                          var rawSym = (p.symbol || p.market || p.market_code || '').toString().trim().toUpperCase();
-                          if(rawSym !== INITIAL) return;
-                          buf.push(p);
-                          if(buf.length > BUF_MAX) buf.shift();
-                          var last10 = maybe('last10Container');
-                          if(last10){
-                            var arr = (last10._arr || []).slice();
-                            arr.push(p.last_decimal === undefined || p.last_decimal === null ? '-' : String(p.last_decimal));
-                            if(arr.length > 10) arr = arr.slice(arr.length-10);
-                            last10._arr = arr;
-                            last10.innerHTML = '';
-                            for(var i=0;i<arr.length;i++){
-                              var cell=document.createElement('div'); cell.textContent = arr[i];
-                              cell.style.cssText='display:inline-flex;width:26px;height:26px;align-items:center;justify-content:center;border-radius:4px;margin:2px;border:1px solid rgba(0,0,0,0.06);font-weight:700';
-                              last10.appendChild(cell);
-                            }
-                          }
-                          if(p.analysis_event){
-                            maybeAppendRaw('[ANALYSIS] '+(p.analysis_event||'')+' '+(p.message||'')); 
-                          }
-                        }
-                        if(ev.data.type === 'analysis'){
-                          var p = ev.data.payload || {};
-                          if(p.analysis_event){
-                            maybeAppendRaw('[ANALYSIS] '+(p.analysis_event||'')+' '+(p.message||''));
-                            var as = maybe('analysisStatusText'); if(as) as.textContent = (p.analysis_event||'')+': '+(p.message||'');
-                          }
-                        }
-                      } catch(e){}
-                    }, false);
-                  } catch(e){}
-                })();`;
-              doc.body.appendChild(bridgeScript);
-
-              const appScript = doc.createElement('script');
-              appScript.src = '/static/app.js?_r=' + Date.now();
-              appScript.async = false;
-              appScript.onload = function(){ console.log('app.js loaded inside overlay iframe for', overlaySymbol); };
-              appScript.onerror = function(){ /* ignore */ };
-              doc.body.appendChild(appScript);
-
-              const assistantScript = doc.createElement('script');
-              assistantScript.src = '/static/hero_assistant_panel.js?_r=' + Date.now();
-              assistantScript.async = false;
-              assistantScript.onerror = function(){ /* ignore */ };
-              doc.body.appendChild(assistantScript);
-            }
+            const appScript = doc.createElement('script');
+            appScript.src = '/static/app.js?_r=' + Date.now();
+            appScript.async = false;
+            appScript.onload = function(){ console.log('app.js loaded inside overlay iframe for', overlaySymbol); };
+            appScript.onerror = function(){ console.error('failed to load /static/app.js inside iframe'); };
+            doc.body.appendChild(appScript);
           } catch(err){
             console.error('Error populating overlay iframe:', err);
-          } finally {
             overlayFrame.onload = null;
           }
         };
@@ -1440,8 +1394,7 @@
           if(readyDoc && readyDoc.readyState === 'complete') overlayFrame.onload();
         } catch(e){}
       }
-
-      function openAnalysisPanel(){
+function openAnalysisPanel(){
         openFullDashboard({ code: 'ANALYSIS', label: 'Analysis' });
       }
       window.openAnalysisPanel = openAnalysisPanel;
@@ -1477,13 +1430,20 @@
         }
       });
 
+      window.__hero_primary_sse_active = true;
       // start SSE
       attachSSE();
+      // keep UI state synced with backend runtime state
+      syncRuntimeStatus();
+      setInterval(syncRuntimeStatus, 4000);
     })();
   </script>
 
   <script>
   (function () {
+    if (window.__hero_primary_sse_active) {
+      return;
+    }
     // --- UI elements & helpers ---
     const countEl = document.getElementById('prediction-count');
     const toastContainer = document.getElementById('toast-container');
@@ -1602,7 +1562,7 @@
         // ignore if already attached or unsupported
       }
 
-      // analysis-named events — keep parity with previous behaviour
+      // analysis-named events â€” keep parity with previous behaviour
       try {
         source.addEventListener('analysis', function (ev) {
           try {
@@ -1612,7 +1572,7 @@
 
             // small specialized UI actions:
             if (evname === 'prediction_toast') {
-              const msg = payload.message || (payload.symbol ? `${payload.symbol} → ${payload.digit ?? payload.prediction_digit}` : 'Prediction');
+              const msg = payload.message || (payload.symbol ? `${payload.symbol} â†’ ${payload.digit ?? payload.prediction_digit}` : 'Prediction');
               showToast(msg, 'success', 4500);
             } else if (evname === 'prediction_posted') {
               console.log('[prediction_posted]', payload);
@@ -1639,7 +1599,7 @@
               if (payload && payload.analysis_event) {
                 const evname = payload.analysis_event;
                 if (evname === 'prediction_toast') {
-                  showToast(payload.message || `${payload.symbol} → ${payload.digit}`, 'success', 4500);
+                  showToast(payload.message || `${payload.symbol} â†’ ${payload.digit}`, 'success', 4500);
                 } else if (evname === 'prediction_stats') {
                   setCount(parseInt(payload.produced_count || 0, 10) || 0);
                 }
@@ -1730,7 +1690,7 @@
           <button id="journalCloseBtn" class="btn" style="padding:6px 10px">Close</button>
         </div>
       </div>
-      <div id="journalMeta" class="jr-muted">Loading…</div>
+      <div id="journalMeta" class="jr-muted">Loadingâ€¦</div>
       <table class="jr-table" style="margin-top:8px">
         <thead>
           <tr>
@@ -1757,6 +1717,7 @@
     const journalMeta = document.getElementById('journalMeta');
     const journalCloseBtn = document.getElementById('journalCloseBtn');
     const journalRefreshBtn = document.getElementById('journalRefreshBtn');
+    let journalPollTimer = null;
 
     function normJournalEntry(e){
       const raw = (e && typeof e === 'object') ? e : {};
@@ -1764,20 +1725,20 @@
       const ts = raw.ts || raw.timestamp || nested.timestamp || null;
       const pred = raw.pred ?? raw.prediction_digit ?? nested.prediction_digit ?? null;
       const actual = raw.actual ?? nested.actual ?? null;
-      const contractType = raw.contract_type || nested.contract_type || raw.trade_type || raw.direction || nested.trade_type || nested.direction || '—';
-      const result = raw.result || nested.result || '—';
+      const contractType = raw.contract_type || nested.contract_type || raw.trade_type || raw.direction || nested.trade_type || nested.direction || 'â€”';
+      const result = raw.result || nested.result || 'â€”';
       const conf = raw.conf ?? raw.confidence ?? nested.confidence ?? null;
       const profit = raw.profit ?? nested.profit ?? null;
       return {
         ts,
-        market: raw.market || raw.symbol || nested.symbol || '—',
-        contractType: String(contractType || '—').toUpperCase(),
+        market: raw.market || raw.symbol || nested.symbol || 'â€”',
+        contractType: String(contractType || 'â€”').toUpperCase(),
         pred,
         actual,
-        result: String(result || '—').toUpperCase(),
+        result: String(result || 'â€”').toUpperCase(),
         profit,
         conf,
-        id: raw.id || raw.prediction_id || nested.prediction_id || '—'
+        id: raw.id || raw.prediction_id || nested.prediction_id || 'â€”'
       };
     }
 
@@ -1799,14 +1760,14 @@
         const tr = document.createElement('tr');
         const dt = e.ts ? new Date(Number(e.ts) * 1000) : null;
         const vals = [
-          dt ? dt.toLocaleString() : '—',
+          dt ? dt.toLocaleString() : 'â€”',
           e.market,
           e.contractType,
-          (e.pred === null || e.pred === undefined) ? '—' : String(e.pred),
-          (e.actual === null || e.actual === undefined) ? '—' : String(e.actual),
+          (e.pred === null || e.pred === undefined) ? 'â€”' : String(e.pred),
+          (e.actual === null || e.actual === undefined) ? 'â€”' : String(e.actual),
           e.result,
-          (e.profit === null || e.profit === undefined || Number.isNaN(Number(e.profit))) ? '—' : Number(e.profit).toFixed(2),
-          (e.conf === null || e.conf === undefined || Number.isNaN(Number(e.conf))) ? '—' : `${(Number(e.conf) * 100).toFixed(1)}%`,
+          (e.profit === null || e.profit === undefined || Number.isNaN(Number(e.profit))) ? 'â€”' : Number(e.profit).toFixed(2),
+          (e.conf === null || e.conf === undefined || Number.isNaN(Number(e.conf))) ? 'â€”' : `${(Number(e.conf) * 100).toFixed(1)}%`,
           e.id
         ];
         vals.forEach(v => {
@@ -1821,10 +1782,16 @@
 
     async function loadJournal(){
       try {
-        if(journalMeta) journalMeta.textContent = 'Loading…';
+        if(journalMeta) journalMeta.textContent = 'Loadingâ€¦';
         const r = await fetch('/control/journal?limit=180', { headers: { 'Accept': 'application/json' } });
         const j = await r.json().catch(()=>null);
-        const entries = (j && Array.isArray(j.entries)) ? j.entries : [];
+        let entries = (j && Array.isArray(j.entries)) ? j.entries : [];
+        if (!entries.length) {
+          const rf = await fetch('/control/journal?limit=180&source=file', { headers: { 'Accept': 'application/json' } });
+          const jf = await rf.json().catch(()=>null);
+          const fEntries = (jf && Array.isArray(jf.entries)) ? jf.entries : [];
+          if (fEntries.length) entries = fEntries;
+        }
         renderJournal(entries);
       } catch (e) {
         renderJournal([]);
@@ -1832,16 +1799,30 @@
       }
     }
 
+    function startJournalPoll(){
+      if (journalPollTimer) return;
+      journalPollTimer = setInterval(() => {
+        if (journalModal && journalModal.classList.contains('open')) loadJournal();
+      }, 2500);
+    }
+    function stopJournalPoll(){
+      if (!journalPollTimer) return;
+      clearInterval(journalPollTimer);
+      journalPollTimer = null;
+    }
+
     function openJournal(){
       if(!journalModal) return;
       journalModal.classList.add('open');
       journalModal.setAttribute('aria-hidden', 'false');
+      startJournalPoll();
       loadJournal();
     }
     function closeJournal(){
       if(!journalModal) return;
       journalModal.classList.remove('open');
       journalModal.setAttribute('aria-hidden', 'true');
+      stopJournalPoll();
     }
 
     if(journalBtn) journalBtn.addEventListener('click', openJournal);
@@ -1859,6 +1840,7 @@
         if(journalModal && journalModal.classList.contains('open')) loadJournal();
       });
     } catch(_) {}
+    window.addEventListener('beforeunload', stopJournalPoll);
   })();
   </script>
 
@@ -1922,7 +1904,7 @@
         overlay.style.background = 'rgba(0,0,0,0.45)';
         overlay.style.zIndex = 100000;
         overlay.innerHTML = '<div style="max-width:780px;width:94%;max-height:88vh;overflow:auto;background:#fff;border-radius:10px;padding:12px;box-shadow:0 30px 80px rgba(2,6,23,0.35)">' +
-                            '<div style="display:flex;justify-content:flex-end"><button id="heroAuthFallbackClose" style="border:0;background:transparent;font-size:20px;cursor:pointer">✕</button></div>' +
+                            '<div style="display:flex;justify-content:flex-end"><button id="heroAuthFallbackClose" style="border:0;background:transparent;font-size:20px;cursor:pointer">âœ•</button></div>' +
                             '<div id="heroAuthFallbackInner"></div></div>';
         document.body.appendChild(overlay);
         document.getElementById('heroAuthFallbackInner').innerHTML = html;
@@ -1975,7 +1957,7 @@
               e.classList.add('authenticated');
               e.classList.remove('disabled');
               e.removeAttribute && e.removeAttribute('disabled');
-              e.title = 'Authenticated — click to view account';
+              e.title = 'Authenticated â€” click to view account';
               // make clicking show balances (if available) or open modal
               e.onclick = function(ev){
                 ev && ev.preventDefault && ev.preventDefault();
@@ -2088,7 +2070,7 @@
         const body = document.createElement('div');
         body.style.marginBottom = '10px';
         body.style.color = '#374151';
-        body.innerHTML = `Demo: <strong>${demo_present ? demo_mask : '—'}</strong> &nbsp;•&nbsp; Real: <strong>${real_present ? real_mask : '—'}</strong>`;
+        body.innerHTML = `Demo: <strong>${demo_present ? demo_mask : 'â€”'}</strong> &nbsp;â€¢&nbsp; Real: <strong>${real_present ? real_mask : 'â€”'}</strong>`;
 
         const actions = document.createElement('div');
         actions.style.display = 'flex';
@@ -2233,3 +2215,4 @@
   <script src="/static/auth_modal.js"></script>
 </body>
 </html>
+

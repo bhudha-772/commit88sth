@@ -723,13 +723,8 @@
       } else {
         showToast('Autotrade OFF — predictions will NOT use account funds', 'info', 3000);
       }
-      try {
-        fetch('/control/start_analysis', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ autotrade_enabled: autotradeEnabled, account })
-        }).catch(e => { console.warn('notifyServerStartAnalysis: POST failed', e); });
-      } catch(e){ console.warn('notifyServerStartAnalysis error', e); }
+      // Intentionally no POST /control/start_analysis here.
+      // Start/stop analysis is controlled by explicit page buttons.
     } catch(e){ console.error('notifyServerStartAnalysis outer error', e); }
   }
 
