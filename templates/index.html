@@ -855,9 +855,20 @@
 
       let derivRunning = false;
 
+      async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+        try {
+          const opts = Object.assign({}, options, { signal: ctrl.signal });
+          return await fetch(url, opts);
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+
       async function startWorkerOnServer(symbolsArray, scope = 'custom') {
         const body = { scope: scope, symbols: symbolsArray };
-        const res = await fetch('/control/start_deriv', {
+        const res = await fetchWithTimeout('/control/start_deriv', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body)
@@ -882,7 +893,7 @@
       }
 
       async function stopWorkerOnServer() {
-        const res = await fetch('/control/stop_deriv', { method: 'POST' });
+        const res = await fetchWithTimeout('/control/stop_deriv', { method: 'POST' }, 8000);
         if (!res.ok) {
           const txt = await res.text().catch(()=>null);
           throw new Error(`stop failed: ${res.status} ${txt || ''}`);
@@ -938,7 +949,7 @@
 
       async function syncRuntimeStatus(){
         try {
-          const r = await fetch('/control/runtime_status', { method:'GET' });
+          const r = await fetchWithTimeout('/control/runtime_status', { method:'GET' }, 5000);
           if (!r.ok) return;
           const j = await r.json().catch(()=>null);
           if (j && j.ok) applyRuntimeStatus(j);
@@ -956,8 +967,8 @@
           if (analysisRunning || (btnStartAnalysis.textContent && btnStartAnalysis.textContent.trim().toLowerCase().startsWith('stop'))) {
             try {
               btnStartAnalysis.disabled = true;
-              btnStartAnalysis.textContent = 'Stoppingâ€¦';
-              const res = await fetch('/control/stop_analysis', { method: 'POST' });
+              btnStartAnalysis.textContent = 'Stopping...';
+              const res = await fetchWithTimeout('/control/stop_analysis', { method: 'POST' }, 9000);
               if(res.status === 403){
                 alert('Stop analysis forbidden (server requires admin access).');
                 btnStartAnalysis.textContent = 'Stop Differs Analysis';
@@ -986,8 +997,8 @@
           // START case (directly start; no prompt)
           try {
             btnStartAnalysis.disabled = true;
-            btnStartAnalysis.textContent = 'Startingâ€¦';
-            const res = await fetch('/control/start_analysis', {
+            btnStartAnalysis.textContent = 'Starting...';
+            const res = await fetchWithTimeout('/control/start_analysis', {
               method: 'POST',
               headers: {'Content-Type':'application/json'},
               body: JSON.stringify({})
@@ -1403,11 +1414,17 @@ function openAnalysisPanel(){
       function closeOverlay(){
         const focusTarget = analysisIcon || document.getElementById('btnStartAnalysis') || document.getElementById('btnStartDeriv');
         try {
+          const closeBtn = document.getElementById('closeOverlayBtn');
+          if (closeBtn && closeBtn.blur) closeBtn.blur();
           if (document.activeElement && overlay.contains(document.activeElement) && document.activeElement.blur) {
             document.activeElement.blur();
           }
           if (focusTarget && focusTarget.focus) {
             focusTarget.focus({ preventScroll: true });
+          }
+          if (overlay.contains(document.activeElement)) {
+            document.body.setAttribute('tabindex', '-1');
+            document.body.focus({ preventScroll: true });
           }
         } catch(e){}
         overlay.classList.remove('visible');
@@ -1690,7 +1707,7 @@ function openAnalysisPanel(){
           <button id="journalCloseBtn" class="btn" style="padding:6px 10px">Close</button>
         </div>
       </div>
-      <div id="journalMeta" class="jr-muted">Loadingâ€¦</div>
+      <div id="journalMeta" class="jr-muted">Loading...</div>
       <table class="jr-table" style="margin-top:8px">
         <thead>
           <tr>
@@ -1725,20 +1742,20 @@ function openAnalysisPanel(){
       const ts = raw.ts || raw.timestamp || nested.timestamp || null;
       const pred = raw.pred ?? raw.prediction_digit ?? nested.prediction_digit ?? null;
       const actual = raw.actual ?? nested.actual ?? null;
-      const contractType = raw.contract_type || nested.contract_type || raw.trade_type || raw.direction || nested.trade_type || nested.direction || 'â€”';
-      const result = raw.result || nested.result || 'â€”';
+      const contractType = raw.contract_type || nested.contract_type || raw.trade_type || raw.direction || nested.trade_type || nested.direction || '?';
+      const result = raw.result || nested.result || '?';
       const conf = raw.conf ?? raw.confidence ?? nested.confidence ?? null;
       const profit = raw.profit ?? nested.profit ?? null;
       return {
         ts,
-        market: raw.market || raw.symbol || nested.symbol || 'â€”',
-        contractType: String(contractType || 'â€”').toUpperCase(),
+        market: raw.market || raw.symbol || nested.symbol || '?',
+        contractType: String(contractType || '?').toUpperCase(),
         pred,
         actual,
-        result: String(result || 'â€”').toUpperCase(),
+        result: String(result || '?').toUpperCase(),
         profit,
         conf,
-        id: raw.id || raw.prediction_id || nested.prediction_id || 'â€”'
+        id: raw.id || raw.prediction_id || nested.prediction_id || '?'
       };
     }
 
@@ -1755,19 +1772,41 @@ function openAnalysisPanel(){
         if(journalMeta) journalMeta.textContent = '0 entries';
         return;
       }
+
+      const seen = new Set();
+      const cleaned = [];
       entries.forEach((x) => {
         const e = normJournalEntry(x);
+        if (!e || String(e.result || '').toUpperCase() === 'PRODUCED') return;
+        const key = String(e.id || '') || `${e.market}:${e.ts}:${e.pred}:${e.actual}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        cleaned.push(e);
+      });
+
+      if(!cleaned.length){
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 9;
+        td.textContent = 'No settled journal entries yet.';
+        tr.appendChild(td);
+        journalRows.appendChild(tr);
+        if(journalMeta) journalMeta.textContent = '0 entries';
+        return;
+      }
+
+      cleaned.forEach((e) => {
         const tr = document.createElement('tr');
         const dt = e.ts ? new Date(Number(e.ts) * 1000) : null;
         const vals = [
-          dt ? dt.toLocaleString() : 'â€”',
+          dt ? dt.toLocaleString() : '?',
           e.market,
           e.contractType,
-          (e.pred === null || e.pred === undefined) ? 'â€”' : String(e.pred),
-          (e.actual === null || e.actual === undefined) ? 'â€”' : String(e.actual),
+          (e.pred === null || e.pred === undefined) ? '?' : String(e.pred),
+          (e.actual === null || e.actual === undefined) ? '?' : String(e.actual),
           e.result,
-          (e.profit === null || e.profit === undefined || Number.isNaN(Number(e.profit))) ? 'â€”' : Number(e.profit).toFixed(2),
-          (e.conf === null || e.conf === undefined || Number.isNaN(Number(e.conf))) ? 'â€”' : `${(Number(e.conf) * 100).toFixed(1)}%`,
+          (e.profit === null || e.profit === undefined || Number.isNaN(Number(e.profit))) ? '?' : Number(e.profit).toFixed(2),
+          (e.conf === null || e.conf === undefined || Number.isNaN(Number(e.conf))) ? '?' : `${(Number(e.conf) * 100).toFixed(1)}%`,
           e.id
         ];
         vals.forEach(v => {
@@ -1777,12 +1816,12 @@ function openAnalysisPanel(){
         });
         journalRows.appendChild(tr);
       });
-      if(journalMeta) journalMeta.textContent = `${entries.length} entries`;
+      if(journalMeta) journalMeta.textContent = `${cleaned.length} entries`;
     }
 
     async function loadJournal(){
       try {
-        if(journalMeta) journalMeta.textContent = 'Loadingâ€¦';
+        if(journalMeta) journalMeta.textContent = 'Loading...';
         const r = await fetch('/control/journal?limit=180', { headers: { 'Accept': 'application/json' } });
         const j = await r.json().catch(()=>null);
         let entries = (j && Array.isArray(j.entries)) ? j.entries : [];

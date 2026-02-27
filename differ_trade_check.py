@@ -691,7 +691,11 @@ def start_sse_listener(sse_url: str, loop: asyncio.AbstractEventLoop, queue: "as
                                             log.info("SSE: skipped duplicate prediction pid=%s", pid)
                                             continue
 
-                                        pd = payload.get("prediction_digit") or payload.get("predicted") or payload.get("pred")
+                                        pd = payload.get("prediction_digit")
+                                        if pd is None:
+                                            pd = payload.get("predicted")
+                                        if pd is None:
+                                            pd = payload.get("pred")
                                         market = payload.get("market") or payload.get("symbol") or payload.get("market_code") or None
 
                                         # coerce pd to integer if possible

@@ -18,7 +18,7 @@
 
   const MAX_SAFE_STAKE = 10000.00; // safety cap to avoid runaway stakes
 
-  const log = (...a) => { try { console.log('AUTOTRADE:', ...a); } catch(e){} };
+  const log = (...a) => { /* quiet by default to reduce UI stutter */ };
   const $id = id => document.getElementById(id);
   const q = s => Array.from(document.querySelectorAll(s||'*'));
 
@@ -168,7 +168,7 @@
       let el = null;
       for(const s of selectors){ el = document.querySelector(s); if(el) break; }
       if(!el){
-        console.log('RAWDBG:', text);
+        // console logging disabled to reduce render stutter
         return;
       }
       const line = document.createElement('div');
@@ -439,12 +439,10 @@
         // do nothing
       } else {
         incrementRecoveryOnLoss();
-        appendRawDebugLine(`[recovery] LOSS detected → step=${runtime.settings.recovery_step} stake=${getCurrentStake()}`);
       }
     } else if(res === 'WIN'){
       // on win we reset to base stake & recovery step 0
       resetRecoverySequence();
-      appendRawDebugLine('[recovery] WIN detected → reset recovery sequence');
     } else {
       // Ignore other statuses
     }
@@ -851,7 +849,6 @@ function onTradeLoss(){
   }
   runtime.recovery.level = (runtime.recovery.level || 0) + 1;
   const next = currentRecoveryStake();
-  console.log('[autotrade] onTradeLoss -> recovery level', runtime.recovery.level, 'next stake', next);
   // persist optionally
   lsSet('recovery', runtime.recovery);
   return next;
@@ -861,7 +858,6 @@ function onTradeLoss(){
 function onTradeWin(){
   runtime.recovery.level = 0;
   lsSet('recovery', runtime.recovery);
-  console.log('[autotrade] onTradeWin -> reset recovery');
   return currentRecoveryStake();
 }
 

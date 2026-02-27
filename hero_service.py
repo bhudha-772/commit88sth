@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 hero_service.py — HTTP + SSE server for HeroX dashboard
 Maintains recent ticks, SSE broadcaster, (prediction handling REMOVED),
@@ -148,6 +148,10 @@ _executor = ThreadPoolExecutor(max_workers=4)
 _JOURNAL_LOCK = threading.Lock()
 
 JOURNAL_MAX_ENTRIES = int(os.environ.get("HERO_JOURNAL_MAX", "200"))
+SETTLED_DEDUP_MAX = max(200, int(os.environ.get("HERO_SETTLED_DEDUP_MAX", "5000")))
+_SETTLED_RECENT_DEQUE = deque()
+_SETTLED_RECENT_SET = set()
+_SETTLED_RECENT_LOCK = threading.Lock()
 
 # ---------- In-memory storage & SSE broadcaster ----------
 _recent_ticks: Deque[List[Any]] = deque(maxlen=RECENT_TICKS_MAX)
@@ -747,13 +751,13 @@ def write_journal_async(entry: dict, max_entries: int = JOURNAL_MAX_ENTRIES):
 def _append_session_entry(entry: dict, max_entries: int = SESSION_JOURNAL_MAX):
     """ Insert entry (dict) at the head of SESSION_JOURNAL (newest-first) and trim. """
     try:
-        pid = entry.get("prediction_id") or entry.get("pred_id") or ""  # dedupe by id if present
+        pid = entry.get("prediction_id") or entry.get("pred_id") or entry.get("id") or ""  # dedupe by id if present
         global SESSION_JOURNAL
         if pid:
             SESSION_JOURNAL = [
                 e
                 for e in SESSION_JOURNAL
-                if (e.get("prediction_id") or e.get("pred_id") or "") != pid
+                if (e.get("prediction_id") or e.get("pred_id") or e.get("id") or "") != pid
             ]
         SESSION_JOURNAL.insert(0, entry)
         if len(SESSION_JOURNAL) > max_entries:
@@ -761,6 +765,27 @@ def _append_session_entry(entry: dict, max_entries: int = SESSION_JOURNAL_MAX):
     except Exception as e:
         _err(f"_append_session_entry failed: {e}")
 
+
+def _mark_settled_once(pid: Any) -> bool:
+    """Return True only the first time a settled prediction id is seen in this process."""
+    try:
+        pid_s = str(pid or "").strip()
+        if not pid_s:
+            return True
+        with _SETTLED_RECENT_LOCK:
+            if pid_s in _SETTLED_RECENT_SET:
+                return False
+            if len(_SETTLED_RECENT_DEQUE) >= SETTLED_DEDUP_MAX:
+                old = _SETTLED_RECENT_DEQUE.popleft()
+                try:
+                    _SETTLED_RECENT_SET.discard(old)
+                except Exception:
+                    pass
+            _SETTLED_RECENT_DEQUE.append(pid_s)
+            _SETTLED_RECENT_SET.add(pid_s)
+        return True
+    except Exception:
+        return True
 # ---------- Helper: normalize result to only WIN or LOSS ----------
 def _coerce_result_to_win_loss(result_value, profit=None, profit_pct=None):
     """
@@ -824,6 +849,9 @@ def _handle_settled_analysis(analysis_payload: dict):
         # canonical timestamp
         ts = int(ap.get("epoch") or ap.get("ts") or ap.get("timestamp") or time.time())
         pid = ap.get("prediction_id") or ap.get("pred_id") or ap.get("id") or f"pred_{int(time.time()*1000)}"
+        if not _mark_settled_once(pid):
+            _log(f"_handle_settled_analysis: duplicate settlement ignored (id={pid})")
+            return {"ok": True, "duplicate": True, "prediction_id": str(pid)}
         market = (ap.get("symbol") or ap.get("market") or "").upper()
         direction = str(ap.get("direction") or ap.get("signal") or ap.get("trade_type") or "").strip().lower()
         contract_type = str(ap.get("contract_type") or "").strip().upper()
@@ -1394,7 +1422,7 @@ def _stop_analysis_process() -> Dict[str, Any]:
     if pid and _is_pid_alive(pid):
         try:
             if os.name == "nt":
-                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=False, capture_output=True)
+                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=False, capture_output=True, timeout=2.0)
             else:
                 os.kill(int(pid), 15)
             stopped = True
@@ -1907,6 +1935,13 @@ def add_prediction_log(payload: dict) -> dict:
                 "symbol": sym,
                 "prediction_digit": pred_digit,
                 "confidence": confidence,
+                "contract_type": payload.get("contract_type") or payload.get("trade_contract_type"),
+                "barrier": payload.get("barrier"),
+                "prediction_mode": payload.get("prediction_mode") or payload.get("mode_name"),
+                "mode": payload.get("mode") or payload.get("account"),
+                "account": payload.get("account") or payload.get("mode"),
+                "ou_contract": payload.get("ou_contract"),
+                "ou_direction": payload.get("ou_direction"),
                 "stake": chosen_stake if chosen_stake is not None else payload.get("stake"),
                 "amount": chosen_stake if chosen_stake is not None else payload.get("amount"),
                 "timestamp": ts_now,
@@ -1918,11 +1953,16 @@ def add_prediction_log(payload: dict) -> dict:
                 "symbol": sym,
                 "market": sym,
                 "digit": pred_digit,
+                "contract_type": payload.get("contract_type") or payload.get("trade_contract_type"),
+                "barrier": payload.get("barrier"),
+                "prediction_mode": payload.get("prediction_mode") or payload.get("mode_name"),
+                "mode": payload.get("mode") or payload.get("account"),
+                "account": payload.get("account") or payload.get("mode"),
                 "stake": chosen_stake if chosen_stake is not None else payload.get("stake"),
                 "amount": chosen_stake if chosen_stake is not None else payload.get("amount"),
                 "confidence": confidence,
                 "status": "produced",
-                "message": f"Prediction: {sym} → {pred_digit}"
+                "message": f"Prediction: {sym} -> {pred_digit}"
             })
 
 
@@ -1934,18 +1974,6 @@ def add_prediction_log(payload: dict) -> dict:
             })
         except Exception:
             pass
-
-        # persist to session only (do NOT write PRODUCED to disk — keep settled-only journaling)
-        try:
-            _append_session_entry({
-                "timestamp": ts_now,
-                "symbol": sym,
-                "result": "PRODUCED",
-                "entry": entry
-            })
-        except Exception:
-            pass
-
 
         return {"ok": True, "prediction_id": pid, "produced_count": produced_count}
 
@@ -2470,7 +2498,7 @@ class OUStrategyEngine:
                     pass
             if "min_samples" in obj:
                 try:
-                    self.min_samples = max(100, int(obj.get("min_samples")))
+                    self.min_samples = max(20, int(obj.get("min_samples")))
                 except Exception:
                     pass
             if "delta" in obj:
@@ -2585,12 +2613,24 @@ def control_ou_settings():
 @app.route("/control/ou_start", methods=["POST"])
 def control_ou_start():
     try:
+        obj = request.get_json(silent=True) or {}
+        trade_stake = obj.get("trade_stake")
+        if trade_stake is None:
+            trade_stake = obj.get("stake")
+        try:
+            trade_stake = float(trade_stake) if trade_stake is not None else float(getattr(OU_ENGINE, "trade_stake", 1.0))
+        except Exception:
+            trade_stake = float(getattr(OU_ENGINE, "trade_stake", 1.0) or 1.0)
+        trade_mode = str(obj.get("trade_mode") or obj.get("mode") or GLOBAL_AUTOTRADE_SETTINGS.get("default_mode") or "demo").strip().lower()
+        if trade_mode not in ("demo", "real"):
+            trade_mode = "demo"
+
         snap = OU_ENGINE.apply_settings(
             {
                 "enabled": True,
                 "auto_predict": True,
-                "trade_stake": 1.0,
-                "trade_mode": str(GLOBAL_AUTOTRADE_SETTINGS.get("default_mode") or "demo"),
+                "trade_stake": float(max(0.35, trade_stake)),
+                "trade_mode": trade_mode,
             },
             persist=True,
         )
@@ -3283,8 +3323,50 @@ def control_start_deriv():
 def control_stop_deriv():
     """ Stop the deriv worker (reads pidfile). Returns JSON about stop status. """
     try:
-        res = worker_manager.stop_worker(timeout=5.0)
-        return jsonify(res)
+        def _call_stop_worker():
+            try:
+                return worker_manager.stop_worker(timeout=2.5)
+            except Exception as e:
+                return {"ok": False, "error": f"stop_worker threw: {e}"}
+
+        fut = _executor.submit(_call_stop_worker)
+        try:
+            res = fut.result(timeout=3.0)
+        except FuturesTimeoutError:
+            _log("control_stop_deriv: stop_worker timed out after 3s; continuing in background")
+            def _bg_wait_and_log():
+                try:
+                    rbg = fut.result(timeout=30.0)
+                    _log(f"control_stop_deriv: background stop_worker result: {rbg}")
+                    if isinstance(rbg, dict) and rbg.get("ok"):
+                        try:
+                            _broadcast_analysis({"analysis_event": "deriv_stopped", "message": "deriv worker stopped (background)"})
+                        except Exception:
+                            pass
+                except Exception as e:
+                    _err(f"control_stop_deriv: background stop_worker error: {e}")
+            try:
+                _executor.submit(_bg_wait_and_log)
+            except Exception:
+                pass
+            return jsonify({"ok": True, "stopping": True, "note": "stop_worker running in background"}), 202
+
+        if isinstance(res, dict) and res.get("ok"):
+            try:
+                _broadcast_analysis({"analysis_event": "deriv_stopped", "message": "deriv worker stopped"})
+            except Exception:
+                pass
+            return jsonify(res), 200
+
+        # If worker is already gone, treat stop as successful/idempotent.
+        try:
+            err_txt = str((res or {}).get("error") or "").lower()
+            if "no pidfile" in err_txt or "not running" in err_txt or "not found" in err_txt:
+                return jsonify({"ok": True, "stopped": True, "note": "worker already stopped"}), 200
+        except Exception:
+            pass
+
+        return jsonify(res), 500
     except Exception as e:
         return jsonify({"ok": False, "error": f"exception in stop handler: {e}"}), 500
 
@@ -3413,10 +3495,12 @@ def control_stop_analysis():
     _check_admin_token(request)
     sess = "differs_agent"
     errors = []
-    try:
+
+    def _do_stop_analysis():
         stop_res = _stop_analysis_process()
+        local_errors = []
         if isinstance(stop_res, dict):
-            errors.extend(stop_res.get("notes") or [])
+            local_errors.extend(stop_res.get("notes") or [])
 
         # best-effort legacy cleanup for tmux/linux deployments
         if os.name != "nt":
@@ -3428,11 +3512,25 @@ def control_stop_analysis():
                     timeout=1.0,
                 )
             except Exception as e:
-                errors.append(f"tmux_kill: {e}")
+                local_errors.append(f"tmux_kill: {e}")
 
-        gone = bool(stop_res.get("stopped"))
-        if not gone:
-            gone = not _analysis_running()
+        gone_local = bool((stop_res or {}).get("stopped"))
+        if not gone_local:
+            gone_local = not _analysis_running()
+        return stop_res, gone_local, local_errors
+
+    try:
+        fut = _executor.submit(_do_stop_analysis)
+        try:
+            stop_res, gone, local_errors = fut.result(timeout=3.0)
+            errors.extend(local_errors)
+        except FuturesTimeoutError:
+            _log("stop_analysis timed out after 3s; continuing in background")
+            try:
+                _broadcast_analysis({"analysis_event": "analysis_stopping", "message": "analysis stop requested"})
+            except Exception:
+                pass
+            return jsonify({"ok": True, "stopping": True, "session": sess}), 202
 
         _log(f"stop_analysis requested; session {sess} attempted kill; verified_gone={gone}")
         try:
@@ -3881,3 +3979,6 @@ if __name__ == "__main__":
             pass
         _shutdown_all_account_managers(timeout=3.0)
         _log("hero_service: shutdown finished")
+
+
+

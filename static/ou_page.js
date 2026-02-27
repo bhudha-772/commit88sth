@@ -20,6 +20,14 @@
   let eventRows = [];
   let ouEnabled = false;
 
+  function getStakeInputValue() {
+    const el = q("ouStake");
+    if (!el) return 1.0;
+    const v = Number(el.value);
+    if (!Number.isFinite(v)) return 1.0;
+    return Math.max(0.35, Number(v.toFixed(2)));
+  }
+
   function addEvent(text) {
     eventRows.unshift({ t: Date.now(), text: String(text || "") });
     if (eventRows.length > 80) eventRows.length = 80;
@@ -79,6 +87,10 @@
     const pending = settings.pending_prediction_id || "-";
 
     setOuButtonState(!!settings.enabled);
+    try {
+      const st = Number(settings.trade_stake);
+      if (Number.isFinite(st) && q("ouStake")) q("ouStake").value = st.toFixed(2);
+    } catch (_) {}
     q("sEngine").textContent = settings.enabled ? "RUNNING" : "STOPPED";
     q("sEngine").className = settings.enabled ? "v ok" : "v";
     q("sBest").textContent = bestSym ? (bestSym.symbol + " | " + (bestSym.best.name || "-")) : "-";
@@ -191,7 +203,7 @@
       if (ouEnabled) {
         await postJSON("/control/ou_stop", {});
       } else {
-        await postJSON("/control/ou_start", {});
+        await postJSON("/control/ou_start", { trade_stake: getStakeInputValue() });
       }
       await refresh();
     } catch (e) {
@@ -223,6 +235,17 @@
   (async function init() {
     const btn = q("btnOuToggle");
     if (btn) btn.addEventListener("click", toggleOu);
+    const stakeEl = q("ouStake");
+    if (stakeEl) {
+      stakeEl.addEventListener("change", async function(){
+        try {
+          await postJSON("/control/ou_settings", { trade_stake: getStakeInputValue() });
+          await refresh();
+        } catch (e) {
+          addEvent("stake save error: " + String((e && e.message) || e));
+        }
+      });
+    }
     attachSSE();
     refresh();
     setInterval(refresh, 2500);
