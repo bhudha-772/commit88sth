@@ -2049,12 +2049,22 @@ class OUStrategyEngine:
         self.enabled = _truthy(os.environ.get("HERO_OU_ENABLED", "0"))
         self.auto_predict = _truthy(os.environ.get("HERO_OU_AUTO_PREDICT", "0"))
         self.window_size = max(200, int(os.environ.get("HERO_OU_WINDOW_SIZE", "5000")))
-        self.min_samples = max(100, int(os.environ.get("HERO_OU_MIN_SAMPLES", "600")))
+        self.min_samples = max(20, int(os.environ.get("HERO_OU_MIN_SAMPLES", "80")))
         self.delta = max(0.0, float(os.environ.get("HERO_OU_DELTA", "0.002")))
         self.z_score = max(0.0, float(os.environ.get("HERO_OU_Z", "1.96")))
         self.analyze_interval_sec = max(0.2, float(os.environ.get("HERO_OU_ANALYZE_INTERVAL_SEC", "1.0")))
         self.predict_cooldown_sec = max(1.0, float(os.environ.get("HERO_OU_PREDICT_COOLDOWN_SEC", "12.0")))
         self.require_strict_edge = _truthy(os.environ.get("HERO_OU_REQUIRE_STRICT_EDGE", "0"))
+        self.selection_pool = max(1, int(os.environ.get("HERO_OU_SELECTION_POOL", "6")))
+        self.trade_stake = max(0.35, float(os.environ.get("HERO_OU_STAKE", "1.0")))
+        self.trade_mode = str(
+            os.environ.get("HERO_OU_MODE")
+            or os.environ.get("DIFFER_MODE")
+            or GLOBAL_AUTOTRADE_SETTINGS.get("default_mode")
+            or "demo"
+        ).strip().lower()
+        if self.trade_mode not in ("demo", "real"):
+            self.trade_mode = "demo"
         self.max_signal_history = max(20, int(os.environ.get("HERO_OU_SIGNAL_HISTORY_MAX", "300")))
 
         focus_env = os.environ.get(
@@ -2097,6 +2107,7 @@ class OUStrategyEngine:
             "OU engine initialized "
             f"(enabled={self.enabled} auto_predict={self.auto_predict} strict_edge={self.require_strict_edge} "
             f"window={self.window_size} min_samples={self.min_samples} "
+            f"selection_pool={self.selection_pool} stake={self.trade_stake} mode={self.trade_mode} "
             f"focus_symbols={len(self.focus_symbols) if self.focus_symbols else 'ALL'})"
         )
 
@@ -2229,29 +2240,42 @@ class OUStrategyEngine:
             return None
 
     def _global_best_signal_locked(self) -> Optional[Dict[str, Any]]:
-        best_row: Optional[Dict[str, Any]] = None
+        rows: List[Dict[str, Any]] = []
         for snap in self.latest_by_symbol.values():
             row = self._signal_row_from_snapshot(snap)
-            if not row:
-                continue
-            if best_row is None:
-                best_row = row
-                continue
-            cur = (
-                float(row.get("ev_per_stake") or -9.0),
-                float(row.get("lower_ci95") or 0.0),
-                float(row.get("p_hat") or 0.0),
-                int(row.get("samples") or 0),
-            )
-            prev = (
-                float(best_row.get("ev_per_stake") or -9.0),
-                float(best_row.get("lower_ci95") or 0.0),
-                float(best_row.get("p_hat") or 0.0),
-                int(best_row.get("samples") or 0),
-            )
-            if cur > prev:
-                best_row = row
-        return best_row
+            if row:
+                rows.append(row)
+        if not rows:
+            return None
+
+        # Top-market shortlist: strict first, then EV, then confidence and sample depth.
+        rows.sort(
+            key=lambda r: (
+                1 if r.get("pass_edge") else 0,
+                float(r.get("ev_per_stake") or -9.0),
+                float(r.get("lower_ci95") or 0.0),
+                float(r.get("p_hat") or 0.0),
+                int(r.get("samples") or 0),
+            ),
+            reverse=True,
+        )
+        pool = rows[: max(1, int(self.selection_pool))]
+
+        # Final "intelligent" score across shortlisted markets.
+        # Weighted for robust confidence + expected value + sample depth.
+        def _score(r: Dict[str, Any]) -> float:
+            ev = float(r.get("ev_per_stake") or 0.0)
+            edge = float((r.get("p_hat") or 0.0) - (r.get("p_be") or 0.0))
+            lower = float(r.get("lower_ci95") or 0.0)
+            samples = float(int(r.get("samples") or 0))
+            sample_factor = min(1.0, samples / max(1.0, float(self.min_samples) * 4.0))
+            strict_bonus = 0.05 if r.get("pass_edge") else 0.0
+            return (ev * 3.0) + (edge * 2.0) + (lower * 0.5) + (sample_factor * 0.3) + strict_bonus
+
+        best = max(pool, key=_score)
+        best["selection_score"] = round(float(_score(best)), 6)
+        best["selection_pool"] = int(len(pool))
+        return best
 
     def _emit_signal(self, signal_row: Dict[str, Any]) -> None:
         sym = str(signal_row.get("symbol") or "").upper()
@@ -2282,9 +2306,15 @@ class OUStrategyEngine:
             "ou_contract": contract,
             "ou_direction": direction,
             "confidence": float(signal_row.get("p_hat") or 0.0),
+            "stake": float(self.trade_stake),
+            "amount": float(self.trade_stake),
+            "mode": str(self.trade_mode),
+            "account": str(self.trade_mode),
             "message": (
                 f"OU signal {contract} on {sym}: p={signal_row.get('p_hat'):.4f}, "
-                f"p_be={signal_row.get('p_be'):.4f}, ev={signal_row.get('ev_per_stake'):.4f}"
+                f"p_be={signal_row.get('p_be'):.4f}, ev={signal_row.get('ev_per_stake'):.4f}, "
+                f"score={float(signal_row.get('selection_score') or 0.0):.4f} "
+                f"(best of {int(signal_row.get('selection_pool') or 1)} markets)"
             ),
             "raw": {"ou_signal": signal_row},
         }
@@ -2385,6 +2415,9 @@ class OUStrategyEngine:
                 "analyze_interval_sec": float(self.analyze_interval_sec),
                 "predict_cooldown_sec": float(self.predict_cooldown_sec),
                 "require_strict_edge": bool(self.require_strict_edge),
+                "selection_pool": int(self.selection_pool),
+                "trade_stake": float(self.trade_stake),
+                "trade_mode": str(self.trade_mode),
                 "focus_symbols": sorted(list(self.focus_symbols)),
                 "total_return": dict(self.total_return),
             }
@@ -2463,6 +2496,23 @@ class OUStrategyEngine:
             if "require_strict_edge" in obj:
                 v = obj.get("require_strict_edge")
                 self.require_strict_edge = v if isinstance(v, bool) else _truthy(v)
+            if "selection_pool" in obj:
+                try:
+                    self.selection_pool = max(1, int(obj.get("selection_pool")))
+                except Exception:
+                    pass
+            if "trade_stake" in obj:
+                try:
+                    self.trade_stake = max(0.35, float(obj.get("trade_stake")))
+                except Exception:
+                    pass
+            if "trade_mode" in obj:
+                try:
+                    m = str(obj.get("trade_mode") or "").strip().lower()
+                    if m in ("demo", "real"):
+                        self.trade_mode = m
+                except Exception:
+                    pass
             if "focus_symbols" in obj:
                 self.focus_symbols = self._parse_focus_symbols(obj.get("focus_symbols"))
             if "total_return" in obj and isinstance(obj.get("total_return"), dict):
@@ -2535,7 +2585,15 @@ def control_ou_settings():
 @app.route("/control/ou_start", methods=["POST"])
 def control_ou_start():
     try:
-        snap = OU_ENGINE.apply_settings({"enabled": True, "auto_predict": True}, persist=True)
+        snap = OU_ENGINE.apply_settings(
+            {
+                "enabled": True,
+                "auto_predict": True,
+                "trade_stake": 1.0,
+                "trade_mode": str(GLOBAL_AUTOTRADE_SETTINGS.get("default_mode") or "demo"),
+            },
+            persist=True,
+        )
         return jsonify({"ok": True, "ou": snap})
     except Exception as e:
         _err(f"control_ou_start error: {e}")
