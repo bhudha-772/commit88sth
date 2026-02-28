@@ -2091,6 +2091,13 @@ class OUStrategyEngine:
         self.require_strict_edge = _truthy(os.environ.get("HERO_OU_REQUIRE_STRICT_EDGE", "0"))
         self.selection_pool = max(1, int(os.environ.get("HERO_OU_SELECTION_POOL", "6")))
         self.trade_stake = max(0.35, float(os.environ.get("HERO_OU_STAKE", "1.0")))
+        # Risk / anti-double-loss guards
+        self.min_ev_per_stake = max(0.0, float(os.environ.get("HERO_OU_MIN_EV_PER_STAKE", "0.010")))
+        self.min_edge_buffer = max(0.0, float(os.environ.get("HERO_OU_MIN_EDGE_BUFFER", "0.003")))
+        self.loss_streak_ev_step = max(0.0, float(os.environ.get("HERO_OU_LOSS_STREAK_EV_STEP", "0.006")))
+        self.loss_streak_pause_trigger = max(2, int(os.environ.get("HERO_OU_LOSS_STREAK_PAUSE_TRIGGER", "2")))
+        self.loss_streak_pause_sec = max(5.0, float(os.environ.get("HERO_OU_LOSS_STREAK_PAUSE_SEC", "45.0")))
+        self.loss_symbol_cooldown_sec = max(0.0, float(os.environ.get("HERO_OU_LOSS_SYMBOL_COOLDOWN_SEC", "22.0")))
         self.trade_mode = str(
             os.environ.get("HERO_OU_MODE")
             or os.environ.get("DIFFER_MODE")
@@ -2131,6 +2138,9 @@ class OUStrategyEngine:
         self.pending_symbol: Optional[str] = None
         self.pending_since = 0.0
         self.pending_timeout_sec = max(20.0, float(os.environ.get("HERO_OU_PENDING_TIMEOUT_SEC", "30.0")))
+        self.loss_streak = 0
+        self.pause_until = 0.0
+        self.symbol_block_until: Dict[str, float] = {}
         self._debug_last_ts: Dict[str, float] = {}
 
         self._load_settings()
