@@ -2094,6 +2094,8 @@ class OUStrategyEngine:
         if self.trade_mode not in ("demo", "real"):
             self.trade_mode = "demo"
         self.max_signal_history = max(20, int(os.environ.get("HERO_OU_SIGNAL_HISTORY_MAX", "300")))
+        self.debug_enabled = _truthy(os.environ.get("HERO_OU_DEBUG", "1"))
+        self.debug_throttle_sec = max(0.0, float(os.environ.get("HERO_OU_DEBUG_THROTTLE_SEC", "4.0")))
 
         focus_env = os.environ.get(
             "HERO_OU_FOCUS_SYMBOLS",
@@ -2123,6 +2125,7 @@ class OUStrategyEngine:
         self.pending_symbol: Optional[str] = None
         self.pending_since = 0.0
         self.pending_timeout_sec = max(20.0, float(os.environ.get("HERO_OU_PENDING_TIMEOUT_SEC", "120.0")))
+        self._debug_last_ts: Dict[str, float] = {}
 
         self._load_settings()
         if _truthy(os.environ.get("HERO_OU_BOOT_DISABLED", "1")):
@@ -2176,6 +2179,42 @@ class OUStrategyEngine:
                 json.dump(payload, f, ensure_ascii=True)
         except Exception as e:
             _err(f"OU save settings failed: {e}")
+
+    def _debug_emit(self, key: str, message: str, **fields: Any) -> None:
+        if not self.debug_enabled:
+            return
+        now = time.time()
+        k = str(key or "ou")
+        try:
+            with self._lock:
+                last = float(self._debug_last_ts.get(k) or 0.0)
+                if self.debug_throttle_sec > 0 and (now - last) < self.debug_throttle_sec:
+                    return
+                self._debug_last_ts[k] = now
+        except Exception:
+            pass
+
+        payload: Dict[str, Any] = {
+            "analysis_event": "ou_debug",
+            "key": k,
+            "message": str(message or ""),
+            "ts": int(now),
+        }
+        detail_parts: List[str] = []
+        for fk, fv in (fields or {}).items():
+            if fv is None:
+                continue
+            payload[str(fk)] = fv
+            detail_parts.append(f"{fk}={fv}")
+        try:
+            _broadcast_analysis(payload)
+        except Exception:
+            pass
+        try:
+            suffix = (" | " + ", ".join(detail_parts)) if detail_parts else ""
+            _log(f"OU DEBUG [{k}] {message}{suffix}")
+        except Exception:
+            pass
 
     def _candidate_rows(self, counts: Counter, n: int) -> List[Dict[str, Any]]:
         if n <= 0:
@@ -2245,9 +2284,25 @@ class OUStrategyEngine:
             best = snapshot.get("best") or {}
             samples = int(best.get("samples") or snapshot.get("samples") or 0)
             if samples < self.min_samples:
+                self._debug_emit(
+                    key=f"skip_samples:{str(snapshot.get('symbol') or '').upper()}",
+                    message="Skipping OU signal: not enough samples",
+                    symbol=str(snapshot.get("symbol") or "").upper(),
+                    samples=samples,
+                    min_samples=int(self.min_samples),
+                )
                 return None
             pass_edge = bool(best.get("pass_edge"))
             if not pass_edge and self.require_strict_edge:
+                self._debug_emit(
+                    key=f"skip_strict:{str(snapshot.get('symbol') or '').upper()}",
+                    message="Skipping OU signal: strict edge required",
+                    symbol=str(snapshot.get("symbol") or "").upper(),
+                    p_hat=float(best.get("p_hat") or 0.0),
+                    p_be=float(best.get("p_be") or 0.0),
+                    lower_ci95=float(best.get("lower_ci95") or 0.0),
+                    ev=float(best.get("ev_per_stake") or 0.0),
+                )
                 return None
             return {
                 "ts": int(time.time()),
@@ -2274,6 +2329,11 @@ class OUStrategyEngine:
             if row:
                 rows.append(row)
         if not rows:
+            self._debug_emit(
+                key="no_candidates",
+                message="No eligible OU signal across symbols",
+                tracked_symbols=int(len(self.latest_by_symbol)),
+            )
             return None
 
         # Top-market shortlist: strict first, then EV, then confidence and sample depth.
@@ -2312,12 +2372,34 @@ class OUStrategyEngine:
             if self.pending_prediction_id:
                 age = now - float(self.pending_since or 0.0)
                 if age < float(self.pending_timeout_sec):
+                    self._debug_emit(
+                        key=f"skip_pending:{sym}",
+                        message="Skipping OU signal: waiting for settlement of previous prediction",
+                        symbol=sym,
+                        pending_prediction_id=self.pending_prediction_id,
+                        pending_age_sec=round(float(age), 3),
+                        pending_timeout_sec=float(self.pending_timeout_sec),
+                    )
                     return
                 _log(f"OU pending timeout released pid={self.pending_prediction_id} age={age:.1f}s")
+                self._debug_emit(
+                    key=f"pending_timeout:{sym}",
+                    message="Pending OU prediction timed out, releasing lock",
+                    symbol=sym,
+                    pending_prediction_id=self.pending_prediction_id,
+                    pending_age_sec=round(float(age), 3),
+                )
                 self.pending_prediction_id = None
                 self.pending_symbol = None
                 self.pending_since = 0.0
             if (now - float(self.last_prediction_ts.get(sym) or 0.0)) < float(self.predict_cooldown_sec):
+                cooldown_left = float(self.predict_cooldown_sec) - (now - float(self.last_prediction_ts.get(sym) or 0.0))
+                self._debug_emit(
+                    key=f"skip_cooldown:{sym}",
+                    message="Skipping OU signal: cooldown active",
+                    symbol=sym,
+                    cooldown_left_sec=round(max(0.0, cooldown_left), 3),
+                )
                 return
             self.last_prediction_ts[sym] = now
 
@@ -2346,10 +2428,36 @@ class OUStrategyEngine:
             ),
             "raw": {"ou_signal": signal_row},
         }
+        self._debug_emit(
+            key=f"post_attempt:{sym}",
+            message="Posting OU prediction",
+            symbol=sym,
+            contract_type=ctype,
+            barrier=barrier,
+            p_hat=float(signal_row.get("p_hat") or 0.0),
+            p_be=float(signal_row.get("p_be") or 0.0),
+            ev=float(signal_row.get("ev_per_stake") or 0.0),
+            stake=float(self.trade_stake),
+            mode=str(self.trade_mode),
+        )
         res = add_prediction_log(prediction_payload)
         signal_row["prediction_id"] = res.get("prediction_id") if isinstance(res, dict) else None
         signal_row["status"] = "posted" if isinstance(res, dict) and res.get("ok") else "error"
         signal_row["error"] = None if signal_row["status"] == "posted" else (res.get("error") if isinstance(res, dict) else "unknown")
+        if signal_row["status"] == "posted":
+            self._debug_emit(
+                key=f"post_ok:{sym}",
+                message="OU prediction posted",
+                symbol=sym,
+                prediction_id=signal_row.get("prediction_id"),
+            )
+        else:
+            self._debug_emit(
+                key=f"post_error:{sym}",
+                message="OU prediction post failed",
+                symbol=sym,
+                error=signal_row.get("error"),
+            )
 
         with self._lock:
             self.total_signals += 1
@@ -2412,6 +2520,13 @@ class OUStrategyEngine:
                 best_signal = self._global_best_signal_locked()
             if best_signal:
                 self._emit_signal(best_signal)
+            else:
+                self._debug_emit(
+                    key="no_best_signal",
+                    message="OU analysis ran but no best signal was emitted",
+                    symbol=sym,
+                    samples=int(snapshot.get("samples") or 0),
+                )
 
     def on_settlement(self, payload: Dict[str, Any]) -> None:
         if not isinstance(payload, dict):
@@ -2427,6 +2542,13 @@ class OUStrategyEngine:
         with self._lock:
             self.total_settled += 1
             if self.pending_prediction_id and pid_s and str(self.pending_prediction_id) == pid_s:
+                self._debug_emit(
+                    key=f"settled:{str(self.pending_symbol or '').upper()}",
+                    message="OU settlement received, pending prediction cleared",
+                    prediction_id=pid_s,
+                    result=str(payload.get("result") or payload.get("outcome") or ""),
+                    profit=payload.get("profit"),
+                )
                 self.pending_prediction_id = None
                 self.pending_symbol = None
                 self.pending_since = 0.0
@@ -3207,8 +3329,8 @@ def control_get_tokens():
 def control_start_deriv():
     """
     Start the deriv worker. Expects JSON body optionally containing: { "symbols": ["R_10","R_25"] }
-    This handler is more tolerant: if worker_manager reports 'already running', we attempt a
-    graceful stop and then try to start again (useful after hero_service restart or stale sessions).
+    This handler is idempotent: if worker_manager reports 'already running', return success
+    without forcing a restart (important after hero_service restarts or Ctrl+C exits).
 
     IMPORTANT SAFETY / FIX: calling worker_manager.start_worker can block in some setups.
     To avoid HTTP handler hanging, attempt a quick (short) wait for start_worker to return.
@@ -3273,42 +3395,15 @@ def control_start_deriv():
                 pass
             return jsonify(res)
 
-        # If start failed but message indicates it's already running, attempt a safe restart
+        # If start failed but message indicates it's already running, treat start as idempotent success.
         err_msg = (res.get("error") or res.get("message") or "").lower()
         if "already" in err_msg or "running" in err_msg:
-            _log("control_start_deriv: worker reported already running -> attempting stop & restart")
+            _log("control_start_deriv: worker already running (idempotent start accepted)")
             try:
-                stop_res = worker_manager.stop_worker(timeout=5.0)
-                _log(f"control_start_deriv: stop_worker attempted -> {stop_res}")
-            except Exception as e_stop:
-                _err(f"control_start_deriv: stop_worker attempt failed: {e_stop}")
-
-            # small pause to give tmux/pids a chance to clean up
-            time.sleep(0.35)
-
-            try:
-                res2 = worker_manager.start_worker(symbols=symbols, push_url=push_url)
-            except Exception as e2:
-                _err(f"control_start_deriv: restart attempt threw: {e2}")
-                res2 = {"ok": False, "error": str(e2)}
-
-            if res2.get("ok"):
-                _log("control_start_deriv: worker restarted ok after stop attempt")
-                try:
-                    _broadcast_analysis({"analysis_event": "deriv_restarted", "message": "deriv worker restarted (control_start_deriv)"})
-                except Exception:
-                    pass
-                return jsonify({"ok": True, "restarted": True, **res2})
-
-            # still failed after restart attempt — return helpful error (include both messages if available)
-            combined_err = {
-                "ok": False,
-                "error": "start_worker reported already-running and restart attempt failed",
-                "start_error": res.get("error") or res.get("message"),
-                "restart_error": res2.get("error") if isinstance(res2, dict) else str(res2)
-            }
-            _err(f"control_start_deriv: restart failed -> {combined_err}")
-            return jsonify(combined_err), 500
+                _broadcast_analysis({"analysis_event": "deriv_started", "message": "deriv worker already running"})
+            except Exception:
+                pass
+            return jsonify({"ok": True, "already_running": True, "symbols": symbols}), 200
 
         # Generic failure (not 'already running')
         _err(f"control_start_deriv: start_worker returned error: {res}")
@@ -3564,12 +3659,23 @@ def control_runtime_status():
         except Exception:
             deriv_running = session_exists("hero_worker")
 
+        # Heartbeat fallback: if ticks are currently flowing, treat deriv as running even if pid state is stale.
+        now_ts = time.time()
+        with _last_tick_lock:
+            last_tick = float(_last_tick_time or 0.0)
+        tick_age = (now_ts - last_tick) if last_tick > 0 else None
+        tick_heartbeat = bool(last_tick > 0 and tick_age is not None and tick_age <= max(12.0, (TICK_STALE_THRESHOLD * 2.0)))
+        if tick_heartbeat:
+            deriv_running = True
+
         analysis_running = bool(_analysis_running())
         ou_running = bool(getattr(OU_ENGINE, "enabled", False))
         return jsonify(
             {
                 "ok": True,
                 "deriv_running": deriv_running,
+                "tick_heartbeat": bool(tick_heartbeat),
+                "last_tick_age_sec": (round(float(tick_age), 3) if tick_age is not None else None),
                 "analysis_running": analysis_running,
                 "ou_running": ou_running,
                 "analysis_pid": _read_analysis_pid(),

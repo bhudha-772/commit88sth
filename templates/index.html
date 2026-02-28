@@ -855,7 +855,7 @@
 
       let derivRunning = false;
 
-      async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
+      async function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), timeoutMs);
         try {
@@ -868,11 +868,25 @@
 
       async function startWorkerOnServer(symbolsArray, scope = 'custom') {
         const body = { scope: scope, symbols: symbolsArray };
-        const res = await fetchWithTimeout('/control/start_deriv', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
-        });
+        let res;
+        try {
+          res = await fetchWithTimeout('/control/start_deriv', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          }, 22000);
+        } catch (err) {
+          const isAbort = !!(err && (err.name === 'AbortError' || String(err.message || '').toLowerCase().includes('aborted')));
+          if (isAbort) {
+            // If request timed out but runtime is already running, treat as success.
+            await syncRuntimeStatus();
+            if (derivRunning) {
+              return { ok: true, starting: true, note: 'start request timed out, but deriv is already running' };
+            }
+            throw new Error('start request timed out; retry once');
+          }
+          throw err;
+        }
 
         // if server responds with 202 Accepted => background start: return parsed json if possible, else a success marker
         if(res.status === 202){
@@ -1298,11 +1312,19 @@
           } catch(e){}
         }
 
-        // Only update tile if running
-        if(!runningSymbols.has(sym)) return;
-
         const tile = tilesByCode.get(sym);
         if(!tile) return;
+        if(!runningSymbols.has(sym)){
+          runningSymbols.add(sym);
+          setTileRunning(sym, true);
+        }
+        // Self-heal button/status when ticks are flowing after page switches.
+        if(!derivRunning){
+          derivRunning = true;
+          if (derivStatus) derivStatus.textContent = 'Deriv: running';
+          if (derivStatusInner) derivStatusInner.textContent = 'Deriv: running';
+          if (btnStartDeriv) btnStartDeriv.textContent = 'Stop Deriv';
+        }
 
         const lastDigitEl = tile.querySelector('[data-last-digit]');
         const lastTickEl = tile.querySelector('[data-last-tick]');

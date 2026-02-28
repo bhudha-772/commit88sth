@@ -220,6 +220,13 @@
         try {
           const p = JSON.parse(ev.data || "{}");
           const ae = String(p.analysis_event || "").toLowerCase();
+          if (ae === "ou_debug") {
+            const msg = String(p.message || "ou_debug");
+            const key = p.key ? ` [${p.key}]` : "";
+            const sym = p.symbol ? ` ${p.symbol}` : "";
+            addEvent(`ou_debug${key}${sym} | ${msg}`);
+            return;
+          }
           if (ae === "ou_analysis" || ae === "ou_signal" || ae === "prediction_result" || ae === "ou_status") {
             addEvent(ae + " | " + (p.symbol || p.market || ""));
             if (ae === "prediction_result" || ae === "ou_signal" || ae === "ou_status") refresh();
