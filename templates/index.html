@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>HeroX â€” Markets</title>
+  <title>HeroX - Markets</title>
   <style>
     :root { --bg: #fff; }
     body { margin: 0; font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial; }
@@ -146,8 +146,8 @@
   <div class="wrap">
     <header>
       <div>
-        <h1>HeroX â€” Markets (click tiles to expand â€¢ choose markets in the chooser)</h1>
-        <div style="font-size:13px;color:var(--muted);margin-top:6px">To select markets: click <strong>Start Deriv â†’ Custom</strong>, then tick the markets. Clicking a tile opens the full dashboard overlay.</div>
+        <h1>HeroX - Markets (click tiles to expand | choose markets in the chooser)</h1>
+        <div style="font-size:13px;color:var(--muted);margin-top:6px">To select markets: click <strong>Start Deriv -> Custom</strong>, then tick the markets. Clicking a tile opens the full dashboard overlay.</div>
       </div>
 
       <div class="top-controls">
@@ -185,7 +185,7 @@
 
   <!-- Start Deriv chooser modal (small) -->
   <div id="derivChooser" class="modal-chooser" role="dialog" aria-hidden="true" aria-modal="true">
-    <h4>Start Deriv â€” choose scope</h4>
+    <h4>Start Deriv - choose scope</h4>
 
     <div class="chooser-row">
       <label><input type="radio" name="deriv_scope" value="all" checked> All markets</label>
@@ -212,7 +212,7 @@
           <button id="closeOverlayBtn" class="close">Close</button>
         </div>
       </div>
-      <!-- isolated iframe â€” app.js runs here and cannot touch parent DOM -->
+      <!-- isolated iframe - app.js runs here and cannot touch parent DOM -->
       <iframe id="overlayFrame" title="Expanded dashboard" style="width:100%;height:calc(100% - 36px);border:0;border-radius:8px;background:white"></iframe>
     </div>
   </div>
@@ -224,8 +224,8 @@
     <div class="app" id="app">
       <header>
         <div>
-          <h1>HeroX â€” Live Ticks & Adaptive Analysis</h1>
-          <div style="font-size:12px;color:var(--muted);margin-top:6px;">White background UI â€¢ Analysis reads <strong>last_decimal</strong> only (not last_unit)</div>
+          <h1>HeroX - Live Ticks & Adaptive Analysis</h1>
+          <div style="font-size:12px;color:var(--muted);margin-top:6px;">White background UI | Analysis reads <strong>last_decimal</strong> only (not last_unit)</div>
         </div>
         <div class="controls">
           <div id="derivStatus_inner" class="status-pill">Deriv: stopped</div>
@@ -246,7 +246,7 @@
       <div class="col-tick" style="margin-top:12px">
         <div class="panel" id="tickPanel">
           <div class="panel-header">
-            <h3>Tick Panel â€” last 10 digits</h3>
+            <h3>Tick Panel - last 10 digits</h3>
             <div style="display:flex;align-items:center;gap:8px;">
               <button id="btnClearTicks" class="btn">Clear Ticks</button>
               <button id="btnToggleTickList" class="btn">Expand</button>
@@ -260,7 +260,7 @@
             </div>
 
             <div class="tick-meta" id="tickMeta">
-              <span>Buffer (displaying last 10 digits in-panel) â€¢ Source: server ticks (last_decimal)</span>
+              <span>Buffer (displaying last 10 digits in-panel) | Source: server ticks (last_decimal)</span>
             </div>
 
             <div class="tick-list" id="tickList" aria-live="polite" title="Recent ticks (scroll)"></div>
@@ -287,7 +287,7 @@
           <div class="panel-body">
             <div class="main-content" style="flex:1 1 auto; overflow:auto; min-height:0; padding-top:12px;">
               <div class="panel-subheader" style="display:flex;justify-content:space-between;align-items:center">
-                <h4 style="margin:0;font-size:13px">Digits 0â€“9 (cursor points to last decimal)</h4>
+                <h4 style="margin:0;font-size:13px">Digits 0-9 (cursor points to last decimal)</h4>
                 <div class="muted">Current last decimal is highlighted (only when analysis is running)</div>
               </div>
 
@@ -314,7 +314,7 @@
             <div class="muted">Event stream & analysis payloads (overlay-local)</div>
           </div>
           <div class="panel-body">
-            <div class="raw-debug" id="rawDebug">SSE: connectingâ€¦</div>
+            <div class="raw-debug" id="rawDebug">SSE: connecting...</div>
             <div style="margin-top:8px"><button id="btnClearRaw" class="btn">Clear Raw</button></div>
           </div>
         </div>
@@ -336,8 +336,8 @@
 
             <div class="col" style="gap:6px">
               <div class="row"><div class="muted">SSE:</div> <div id="sseState" class="count-bubble">connecting</div></div>
-              <div class="row"><div class="muted">Latest analysis event:</div> <div id="latestAnalysis" class="status-pill">â€”</div></div>
-              <div class="row"><div class="muted">Last tick digit:</div> <div id="latestTickDigit" class="status-pill">â€”</div></div>
+              <div class="row"><div class="muted">Latest analysis event:</div> <div id="latestAnalysis" class="status-pill">-</div></div>
+              <div class="row"><div class="muted">Last tick digit:</div> <div id="latestTickDigit" class="status-pill">-</div></div>
             </div>
           </div>
         </div>
@@ -417,7 +417,7 @@
           const card = document.createElement('div');
           card.className = 'header-balance-card';
           card.id = id;
-          card.innerHTML = `<div style="font-size:11px;color:#6b7280">${label}</div><div class="balance-amount">â€”</div><div class="balance-meta"> </div>`;
+          card.innerHTML = `<div style="font-size:11px;color:#6b7280">${label}</div><div class="balance-amount">-</div><div class="balance-meta"> </div>`;
           return card;
         }
 
@@ -429,9 +429,9 @@
               card = createCard(id, mode === 'real' ? 'Real' : 'Demo');
               containerWrap.appendChild(card);
             }
-            const parsed = parseBalanceObj(obj) || { amount: 'â€”', currency: '' };
-            const amt = parsed.amount === null || parsed.amount === undefined || parsed.amount === '' ? 'â€”' : (typeof parsed.amount === 'number' ? parsed.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : String(parsed.amount));
-            const metaText = parsed.loginid ? (parsed.currency ? parsed.currency + ' â€¢ ' + parsed.loginid : parsed.loginid) : (parsed.currency || '');
+            const parsed = parseBalanceObj(obj) || { amount: '-', currency: '' };
+            const amt = parsed.amount === null || parsed.amount === undefined || parsed.amount === '' ? '-' : (typeof parsed.amount === 'number' ? parsed.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : String(parsed.amount));
+            const metaText = parsed.loginid ? (parsed.currency ? parsed.currency + ' | ' + parsed.loginid : parsed.loginid) : (parsed.currency || '');
             const amtEl = card.querySelector('.balance-amount');
             const metaEl = card.querySelector('.balance-meta');
             if(amtEl) amtEl.textContent = amt;
@@ -612,7 +612,7 @@
           const ts = new Date().toLocaleTimeString();
           const title = document.createElement('div');
           title.className = 'raw-time';
-          title.textContent = `${ts} ${label ? 'â€¢ ' + label : ''}`;
+          title.textContent = `${ts} ${label ? '| ' + label : ''}`;
           const body = document.createElement('div');
           body.className = 'raw-msg';
           try { body.textContent = (typeof payload === 'string') ? payload : JSON.stringify(payload); } catch(e) { body.textContent = String(payload); }
@@ -698,7 +698,7 @@
         panel.innerHTML = `
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <div style="font-weight:800">Universal Raw Debug</div>
-            <div><button id="heroRawClose" style="background:transparent;border:0;color:#fff;cursor:pointer">âœ•</button></div>
+            <div><button id="heroRawClose" style="background:transparent;border:0;color:#fff;cursor:pointer">x</button></div>
           </div>
           <div class="raw-actions"><button id="heroRawClear">Clear</button><button id="heroRawCollapse">Collapse</button></div>
           <div id="heroRawBody" aria-live="polite"></div>
@@ -750,7 +750,7 @@
             const ts = new Date().toLocaleTimeString();
             const title = document.createElement('div');
             title.className = 'raw-time';
-            title.textContent = `${ts} ${label ? 'â€¢ ' + label : ''}`;
+            title.textContent = `${ts} ${label ? '| ' + label : ''}`;
             const body = document.createElement('div');
             body.className = 'raw-msg';
             try { body.textContent = (typeof payload === 'string') ? payload : JSON.stringify(payload); } catch(e) { body.textContent = String(payload); }
@@ -784,9 +784,9 @@
 
           <div class="market-meta">
             <div class="market-stats">
-              <div class="market-lastdigit" data-last-digit>â€”</div>
+              <div class="market-lastdigit" data-last-digit>-</div>
               <div style="display:flex;flex-direction:column;align-items:flex-start">
-                <div class="market-small" data-last-tick>Last tick: â€”</div>
+                <div class="market-small" data-last-tick>Last tick: -</div>
                 <div class="market-small" style="margin-top:4px" data-last-price> </div>
               </div>
             </div>
@@ -837,8 +837,8 @@
           const lastDigitEl = tile.querySelector('[data-last-digit]');
           const lastTickEl = tile.querySelector('[data-last-tick]');
           const priceEl = tile.querySelector('[data-last-price]');
-          if(lastDigitEl) lastDigitEl.textContent = 'â€”';
-          if(lastTickEl) lastTickEl.textContent = 'Last tick: â€”';
+          if(lastDigitEl) lastDigitEl.textContent = '-';
+          if(lastTickEl) lastTickEl.textContent = 'Last tick: -';
           if(priceEl) priceEl.textContent = '';
         }
       }
@@ -1015,7 +1015,7 @@
             analysisStatus.textContent = 'Differs: running';
             if (analysisStatusInner) analysisStatusInner.textContent = 'Differs: running';
             btnStartAnalysis.textContent = 'Stop Differs Analysis';
-            // Do not open overlay automatically â€” only user opens overlay via icon.
+            // Do not open overlay automatically - only user opens overlay via icon.
           } catch(e){
             alert('Error starting analysis: ' + (e && e.message ? e.message : e));
             btnStartAnalysis.textContent = 'Start Differs Analysis';
@@ -1265,7 +1265,7 @@
                   var lastTickEl = t.querySelector('[data-last-tick]');
                   var priceEl = t.querySelector('[data-last-price]');
                   if(last_dec === null || last_dec === "" || last_dec === undefined){
-                    if(lastDigitEl) lastDigitEl.textContent = 'â€”';
+                    if(lastDigitEl) lastDigitEl.textContent = '-';
                   } else {
                     var d = (typeof last_dec === 'number' || /^\d+$/.test(String(last_dec))) ? String(last_dec) : String(last_dec);
                     if(lastDigitEl) lastDigitEl.textContent = d;
@@ -1309,7 +1309,7 @@
         const priceEl = tile.querySelector('[data-last-price]');
 
         if(last_dec === null || last_dec === "" || last_dec === undefined){
-          if(lastDigitEl) lastDigitEl.textContent = 'â€”';
+          if(lastDigitEl) lastDigitEl.textContent = '-';
         } else {
           const d = (typeof last_dec === 'number' || /^\d+$/.test(String(last_dec))) ? String(last_dec) : String(last_dec);
           if(lastDigitEl) lastDigitEl.textContent = d;
@@ -1579,7 +1579,7 @@ function openAnalysisPanel(){
         // ignore if already attached or unsupported
       }
 
-      // analysis-named events â€” keep parity with previous behaviour
+      // analysis-named events - keep parity with previous behaviour
       try {
         source.addEventListener('analysis', function (ev) {
           try {
@@ -1589,7 +1589,7 @@ function openAnalysisPanel(){
 
             // small specialized UI actions:
             if (evname === 'prediction_toast') {
-              const msg = payload.message || (payload.symbol ? `${payload.symbol} â†’ ${payload.digit ?? payload.prediction_digit}` : 'Prediction');
+              const msg = payload.message || (payload.symbol ? `${payload.symbol} -> ${payload.digit ?? payload.prediction_digit}` : 'Prediction');
               showToast(msg, 'success', 4500);
             } else if (evname === 'prediction_posted') {
               console.log('[prediction_posted]', payload);
@@ -1616,7 +1616,7 @@ function openAnalysisPanel(){
               if (payload && payload.analysis_event) {
                 const evname = payload.analysis_event;
                 if (evname === 'prediction_toast') {
-                  showToast(payload.message || `${payload.symbol} â†’ ${payload.digit}`, 'success', 4500);
+                  showToast(payload.message || `${payload.symbol} -> ${payload.digit}`, 'success', 4500);
                 } else if (evname === 'prediction_stats') {
                   setCount(parseInt(payload.produced_count || 0, 10) || 0);
                 }
@@ -1943,7 +1943,7 @@ function openAnalysisPanel(){
         overlay.style.background = 'rgba(0,0,0,0.45)';
         overlay.style.zIndex = 100000;
         overlay.innerHTML = '<div style="max-width:780px;width:94%;max-height:88vh;overflow:auto;background:#fff;border-radius:10px;padding:12px;box-shadow:0 30px 80px rgba(2,6,23,0.35)">' +
-                            '<div style="display:flex;justify-content:flex-end"><button id="heroAuthFallbackClose" style="border:0;background:transparent;font-size:20px;cursor:pointer">âœ•</button></div>' +
+                            '<div style="display:flex;justify-content:flex-end"><button id="heroAuthFallbackClose" style="border:0;background:transparent;font-size:20px;cursor:pointer">x</button></div>' +
                             '<div id="heroAuthFallbackInner"></div></div>';
         document.body.appendChild(overlay);
         document.getElementById('heroAuthFallbackInner').innerHTML = html;
@@ -1996,7 +1996,7 @@ function openAnalysisPanel(){
               e.classList.add('authenticated');
               e.classList.remove('disabled');
               e.removeAttribute && e.removeAttribute('disabled');
-              e.title = 'Authenticated â€” click to view account';
+              e.title = 'Authenticated - click to view account';
               // make clicking show balances (if available) or open modal
               e.onclick = function(ev){
                 ev && ev.preventDefault && ev.preventDefault();
@@ -2109,7 +2109,7 @@ function openAnalysisPanel(){
         const body = document.createElement('div');
         body.style.marginBottom = '10px';
         body.style.color = '#374151';
-        body.innerHTML = `Demo: <strong>${demo_present ? demo_mask : 'â€”'}</strong> &nbsp;â€¢&nbsp; Real: <strong>${real_present ? real_mask : 'â€”'}</strong>`;
+        body.innerHTML = `Demo: <strong>${demo_present ? demo_mask : '-'}</strong> &nbsp;|&nbsp; Real: <strong>${real_present ? real_mask : '-'}</strong>`;
 
         const actions = document.createElement('div');
         actions.style.display = 'flex';

@@ -86,6 +86,12 @@ DASH_PUSH_URL = os.environ.get("HERO_DASHBOARD_PUSH_URL", "").strip() or None
 INFER_TRAILING_ZEROS_ENV = os.environ.get("HERO_INFER_TRAILING_ZEROS", "1")
 DEFAULT_INFER_TRAILING_ZEROS = INFER_TRAILING_ZEROS_ENV not in ("0", "false", "False", "")
 
+# Subscription transport preference:
+# Use raw websocket by default because symbol routing is explicit (subscription id -> symbol)
+# and tends to be more reliable for many concurrent symbols.
+PREFER_RAW_WS_ENV = os.environ.get("HERO_PREFER_RAW_WS", "1")
+PREFER_RAW_WS = PREFER_RAW_WS_ENV not in ("0", "false", "False", "")
+
 # ensure CSV exists with header
 if not os.path.exists(TICKS_CSV):
     try:
@@ -128,6 +134,9 @@ class DerivWorker:
         self._aggregator_task: Optional[asyncio.Task] = None
         self._using_deriv_api = False
         self._subscriptions = set()
+        self._subid_to_symbol = {}
+        self._reqid_to_symbol = {}
+        self._next_req_id = 1
 
         # trailing-zero inference controls
         self.infer_trailing_zeros = bool(infer_trailing_zeros)
@@ -241,7 +250,7 @@ class DerivWorker:
             except Exception:
                 pass
 
-    async def on_tick(self, tick_event):
+    async def on_tick(self, tick_event, forced_symbol=None):
         try:
             # tick_event expected shape containing 'tick' key or be already the tick dict
             t = tick_event.get("tick") if isinstance(tick_event, dict) and "tick" in tick_event else tick_event
@@ -272,15 +281,30 @@ class DerivWorker:
 
             # symbol determination
             symbol = None
-            if isinstance(t, dict):
+            if forced_symbol:
+                symbol = forced_symbol
+            if not symbol and isinstance(t, dict):
                 symbol = t.get("symbol")
             if not symbol and isinstance(tick_event, dict):
                 try:
-                    symbol = tick_event.get("echo_req", {}).get("ticks")
+                    er = tick_event.get("echo_req", {}) or {}
+                    symbol = er.get("ticks") or er.get("ticks_history")
                 except Exception:
                     symbol = None
+            if not symbol and isinstance(tick_event, dict):
+                try:
+                    sub_id = ((tick_event.get("subscription") or {}).get("id"))
+                    if sub_id is not None:
+                        symbol = self._subid_to_symbol.get(str(sub_id))
+                except Exception:
+                    symbol = None
+            # only fallback to first symbol when exactly one symbol is configured
             if not symbol:
-                symbol = self.symbols[0] if self.symbols else "R_100"
+                if len(self.symbols) == 1:
+                    symbol = self.symbols[0]
+                else:
+                    # cannot classify this tick reliably; skip to avoid cross-symbol contamination
+                    return
             symbol = symbol.upper() if isinstance(symbol, str) else str(symbol)
 
             # Produce preserved string
@@ -351,7 +375,7 @@ class DerivWorker:
             try:
                 src = await self.api.subscribe({"ticks": s, "subscribe": 1})
                 try:
-                    src.subscribe(lambda ev, _self=self: asyncio.create_task(_self.on_tick(ev)))
+                    src.subscribe(lambda ev, _self=self, _sym=s: asyncio.create_task(_self.on_tick(ev, forced_symbol=_sym)))
                     print(f"Subscribed (deriv_api) to {s}")
                 except Exception:
                     print(f"Subscribed (deriv_api) to {s} (fallback, callback attach failed)")
@@ -372,10 +396,13 @@ class DerivWorker:
 
         for s in self.symbols:
             try:
-                req = {"ticks": s, "subscribe": 1}
+                req_id = int(self._next_req_id)
+                self._next_req_id += 1
+                req = {"ticks": s, "subscribe": 1, "req_id": req_id}
+                self._reqid_to_symbol[str(req_id)] = str(s).upper()
                 await self._raw_conn.send(json.dumps(req))
                 self._subscriptions.add(s)
-                print(f"Raw subscribe sent for {s}")
+                print(f"Raw subscribe sent for {s} (req_id={req_id})")
             except Exception as e:
                 print(f"raw subscribe send error for {s}: {e}")
 
@@ -398,9 +425,44 @@ class DerivWorker:
                         data = json.loads(msg)
                     except Exception:
                         continue
-                    if isinstance(data, dict) and "tick" in data:
+                    if isinstance(data, dict):
                         try:
-                            await self.on_tick(data)
+                            sym_hint = None
+                            msg_type = str(data.get("msg_type") or "").lower()
+                            req_id = data.get("req_id")
+                            if req_id is not None:
+                                sym_hint = self._reqid_to_symbol.get(str(req_id))
+                            if not sym_hint:
+                                er = data.get("echo_req") or {}
+                                if isinstance(er, dict):
+                                    sym_hint = er.get("ticks") or er.get("ticks_history")
+                            tick_obj = data.get("tick") if isinstance(data.get("tick"), dict) else {}
+                            if not sym_hint and isinstance(tick_obj, dict):
+                                sym_hint = tick_obj.get("symbol")
+
+                            sub = data.get("subscription") or {}
+                            sub_id = sub.get("id") if isinstance(sub, dict) else None
+                            # Some tick streams only expose sub id on tick payloads.
+                            if sub_id is None and isinstance(tick_obj, dict):
+                                sub_id = tick_obj.get("id")
+                            if sub_id is not None and not sym_hint:
+                                sym_hint = self._subid_to_symbol.get(str(sub_id))
+                            if sub_id is not None and sym_hint:
+                                self._subid_to_symbol[str(sub_id)] = str(sym_hint).upper()
+
+                            # Subscribe acknowledgements may arrive before first tick payload.
+                            if msg_type == "tick" and sub_id is not None and sym_hint:
+                                self._subid_to_symbol[str(sub_id)] = str(sym_hint).upper()
+
+                            if "tick" in data:
+                                forced_sym = None
+                                if sub_id is not None:
+                                    forced_sym = self._subid_to_symbol.get(str(sub_id))
+                                if not forced_sym:
+                                    forced_sym = sym_hint
+                                if not forced_sym and isinstance(tick_obj, dict):
+                                    forced_sym = tick_obj.get("symbol")
+                                await self.on_tick(data, forced_symbol=forced_sym)
                         except Exception:
                             pass
             except Exception as e:
@@ -414,7 +476,7 @@ class DerivWorker:
         self._recv_task = asyncio.create_task(_recv_loop())
 
     async def subscribe_all(self):
-        if DERIV_API_AVAILABLE:
+        if (not PREFER_RAW_WS) and DERIV_API_AVAILABLE:
             try:
                 await self.subscribe_with_deriv_api()
                 return
