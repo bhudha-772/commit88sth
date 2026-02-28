@@ -878,12 +878,13 @@
         } catch (err) {
           const isAbort = !!(err && (err.name === 'AbortError' || String(err.message || '').toLowerCase().includes('aborted')));
           if (isAbort) {
-            // If request timed out but runtime is already running, treat as success.
+            // Timeout/abort can happen while worker is actually launching.
             await syncRuntimeStatus();
             if (derivRunning) {
               return { ok: true, starting: true, note: 'start request timed out, but deriv is already running' };
             }
-            throw new Error('start request timed out; retry once');
+            // Do not hard-fail the UI here; keep status as starting and let runtime polling settle it.
+            return { ok: true, starting: true, uncertain: true, note: 'start request timed out; waiting for runtime sync' };
           }
           throw err;
         }
@@ -932,6 +933,7 @@
           console.error('stop error', err);
           alert('Failed to stop worker: ' + (err && err.message ? err.message : err));
         }).finally(() => {
+          syncRuntimeStatus();
           btnStartDeriv.disabled = false;
         });
       });
@@ -950,6 +952,16 @@
           if (derivStatus) derivStatus.textContent = derivOn ? 'Deriv: running' : 'Deriv: stopped';
           if (derivStatusInner) derivStatusInner.textContent = derivOn ? 'Deriv: running' : 'Deriv: stopped';
           if (btnStartDeriv) btnStartDeriv.textContent = derivOn ? 'Stop Deriv' : 'Start Deriv';
+          if (derivOn) {
+            const rs = Array.isArray(rt && rt.running_symbols) ? rt.running_symbols : [];
+            if (rs.length) {
+              runningSymbols = new Set(rs.map(s => String(s || '').toUpperCase()).filter(Boolean));
+              setAllTilesRunningForSet(runningSymbols);
+            }
+          } else {
+            runningSymbols.clear();
+            setAllTilesRunningForSet(new Set());
+          }
 
           const analysisOn = !!(rt && rt.analysis_running);
           analysisRunning = analysisOn;
@@ -1087,6 +1099,7 @@
             console.error('start all error', err);
             alert('Failed to start worker: ' + (err && err.message ? err.message : err));
           }).finally(() => {
+            syncRuntimeStatus();
             document.getElementById('chooserStart').disabled = false;
           });
 
@@ -1118,6 +1131,7 @@
           console.error('start custom error', err);
           alert('Failed to start worker: ' + (err && err.message ? err.message : err));
         }).finally(() => {
+          syncRuntimeStatus();
           document.getElementById('chooserStart').disabled = false;
         });
       });

@@ -64,6 +64,12 @@ GLOBAL_ANALYSIS_PROC_LOCK = threading.Lock()
 # Example shape: { "demo": {"stake": 1.0}, "real": {"stake": 0.35}, "default_mode": "demo" }
 GLOBAL_AUTOTRADE_SETTINGS = {"demo": {"stake": None}, "real": {"stake": None}, "default_mode": (os.environ.get("DIFFER_MODE") or "demo")}
 
+# server-side deriv runtime state (used to keep UI stable across page switches/reloads)
+GLOBAL_DERIV_RUNTIME_LOCK = threading.Lock()
+GLOBAL_DERIV_EXPECTED_RUNNING = False
+GLOBAL_DERIV_LAST_START_TS = 0.0
+GLOBAL_DERIV_RUNNING_SYMBOLS = set()
+
 
 # ---------- Config ----------
 LOG_DIR = os.path.expanduser("~/.hero_logs")
@@ -2077,7 +2083,7 @@ class OUStrategyEngine:
         self.enabled = _truthy(os.environ.get("HERO_OU_ENABLED", "0"))
         self.auto_predict = _truthy(os.environ.get("HERO_OU_AUTO_PREDICT", "0"))
         self.window_size = max(200, int(os.environ.get("HERO_OU_WINDOW_SIZE", "5000")))
-        self.min_samples = max(20, int(os.environ.get("HERO_OU_MIN_SAMPLES", "80")))
+        self.min_samples = max(20, int(os.environ.get("HERO_OU_MIN_SAMPLES", "20")))
         self.delta = max(0.0, float(os.environ.get("HERO_OU_DELTA", "0.002")))
         self.z_score = max(0.0, float(os.environ.get("HERO_OU_Z", "1.96")))
         self.analyze_interval_sec = max(0.2, float(os.environ.get("HERO_OU_ANALYZE_INTERVAL_SEC", "1.0")))
@@ -2124,7 +2130,7 @@ class OUStrategyEngine:
         self.pending_prediction_id: Optional[str] = None
         self.pending_symbol: Optional[str] = None
         self.pending_since = 0.0
-        self.pending_timeout_sec = max(20.0, float(os.environ.get("HERO_OU_PENDING_TIMEOUT_SEC", "120.0")))
+        self.pending_timeout_sec = max(20.0, float(os.environ.get("HERO_OU_PENDING_TIMEOUT_SEC", "30.0")))
         self._debug_last_ts: Dict[str, float] = {}
 
         self._load_settings()
@@ -2279,21 +2285,28 @@ class OUStrategyEngine:
             "counts": {str(k): int(v) for k, v in sorted(counts.items())},
         }
 
-    def _signal_row_from_snapshot(self, snapshot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _signal_row_from_snapshot(
+        self,
+        snapshot: Dict[str, Any],
+        include_low_samples: bool = False,
+        min_override: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
         try:
             best = snapshot.get("best") or {}
             samples = int(best.get("samples") or snapshot.get("samples") or 0)
-            if samples < self.min_samples:
-                self._debug_emit(
-                    key=f"skip_samples:{str(snapshot.get('symbol') or '').upper()}",
-                    message="Skipping OU signal: not enough samples",
-                    symbol=str(snapshot.get("symbol") or "").upper(),
-                    samples=samples,
-                    min_samples=int(self.min_samples),
-                )
+            min_needed = int(min_override if min_override is not None else self.min_samples)
+            if samples < min_needed:
+                if not include_low_samples:
+                    self._debug_emit(
+                        key=f"skip_samples:{str(snapshot.get('symbol') or '').upper()}",
+                        message="Skipping OU signal: not enough samples",
+                        symbol=str(snapshot.get("symbol") or "").upper(),
+                        samples=samples,
+                        min_samples=int(min_needed),
+                    )
                 return None
             pass_edge = bool(best.get("pass_edge"))
-            if not pass_edge and self.require_strict_edge:
+            if not pass_edge and self.require_strict_edge and not include_low_samples:
                 self._debug_emit(
                     key=f"skip_strict:{str(snapshot.get('symbol') or '').upper()}",
                     message="Skipping OU signal: strict edge required",
@@ -2317,7 +2330,7 @@ class OUStrategyEngine:
                 "lower_ci95": float(best.get("lower_ci95") or 0.0),
                 "ev_per_stake": float(best.get("ev_per_stake") or 0.0),
                 "pass_edge": pass_edge,
-                "signal_basis": ("strict_edge" if pass_edge else "best_available"),
+                "signal_basis": ("strict_edge" if pass_edge else ("warmup_top_market" if include_low_samples else "best_available")),
             }
         except Exception:
             return None
@@ -2329,12 +2342,26 @@ class OUStrategyEngine:
             if row:
                 rows.append(row)
         if not rows:
-            self._debug_emit(
-                key="no_candidates",
-                message="No eligible OU signal across symbols",
-                tracked_symbols=int(len(self.latest_by_symbol)),
-            )
-            return None
+            # Warmup fallback: still choose a top market even before full min_samples.
+            warmup_min = max(12, min(20, int(self.min_samples)))
+            for snap in self.latest_by_symbol.values():
+                row = self._signal_row_from_snapshot(snap, include_low_samples=True, min_override=warmup_min)
+                if row:
+                    rows.append(row)
+            if rows:
+                self._debug_emit(
+                    key="warmup_fallback",
+                    message="Using warmup top-market fallback for OU prediction",
+                    warmup_min_samples=warmup_min,
+                    candidates=int(len(rows)),
+                )
+            else:
+                self._debug_emit(
+                    key="no_candidates",
+                    message="No eligible OU signal across symbols",
+                    tracked_symbols=int(len(self.latest_by_symbol)),
+                )
+                return None
 
         # Top-market shortlist: strict first, then EV, then confidence and sample depth.
         rows.sort(
@@ -2746,6 +2773,11 @@ def control_ou_start():
         trade_mode = str(obj.get("trade_mode") or obj.get("mode") or GLOBAL_AUTOTRADE_SETTINGS.get("default_mode") or "demo").strip().lower()
         if trade_mode not in ("demo", "real"):
             trade_mode = "demo"
+        try:
+            min_samples = int(obj.get("min_samples") or 20)
+        except Exception:
+            min_samples = 20
+        min_samples = max(12, min(200, min_samples))
 
         snap = OU_ENGINE.apply_settings(
             {
@@ -2753,6 +2785,8 @@ def control_ou_start():
                 "auto_predict": True,
                 "trade_stake": float(max(0.35, trade_stake)),
                 "trade_mode": trade_mode,
+                "min_samples": int(min_samples),
+                "require_strict_edge": False,
             },
             persist=True,
         )
@@ -3276,6 +3310,39 @@ def _dashboard_push_url_from_request(req):
     return f"http://{ip}:{port}/control/push_tick"
 
 
+def _set_deriv_runtime_state(*, running: Optional[bool] = None, symbols: Optional[List[str]] = None, merge_symbols: bool = False) -> None:
+    """Best-effort in-memory runtime state for Deriv worker and active symbols."""
+    global GLOBAL_DERIV_EXPECTED_RUNNING, GLOBAL_DERIV_LAST_START_TS, GLOBAL_DERIV_RUNNING_SYMBOLS
+    try:
+        with GLOBAL_DERIV_RUNTIME_LOCK:
+            if running is not None:
+                GLOBAL_DERIV_EXPECTED_RUNNING = bool(running)
+                if running:
+                    GLOBAL_DERIV_LAST_START_TS = time.time()
+            if symbols is not None:
+                norm = {str(s or "").strip().upper() for s in symbols if str(s or "").strip()}
+                if merge_symbols:
+                    GLOBAL_DERIV_RUNNING_SYMBOLS.update(norm)
+                else:
+                    GLOBAL_DERIV_RUNNING_SYMBOLS = set(norm)
+            if running is False:
+                GLOBAL_DERIV_RUNNING_SYMBOLS = set()
+    except Exception:
+        pass
+
+
+def _get_deriv_runtime_state() -> Dict[str, Any]:
+    try:
+        with GLOBAL_DERIV_RUNTIME_LOCK:
+            return {
+                "expected_running": bool(GLOBAL_DERIV_EXPECTED_RUNNING),
+                "last_start_ts": float(GLOBAL_DERIV_LAST_START_TS or 0.0),
+                "running_symbols": sorted(list(GLOBAL_DERIV_RUNNING_SYMBOLS)),
+            }
+    except Exception:
+        return {"expected_running": False, "last_start_ts": 0.0, "running_symbols": []}
+
+
 # --- Helper to normalize symbols from the request ---
 def _parse_requested_symbols(req_body: dict) -> List[str]:
     syms: List[str] = []
@@ -3376,6 +3443,7 @@ def control_start_deriv():
                 except Exception:
                     pass
                 # respond quickly to the client to avoid hanging UI
+                _set_deriv_runtime_state(running=True, symbols=symbols, merge_symbols=False)
                 return jsonify({"ok": True, "starting": True, "note": "start_worker running in background, UI will update via SSE"}), 202
         except Exception as e:
             _err(f"control_start_deriv: failed to submit start_worker: {e}")
@@ -3389,6 +3457,7 @@ def control_start_deriv():
         # If start succeeded, return
         if res.get("ok"):
             _log("control_start_deriv: worker started ok")
+            _set_deriv_runtime_state(running=True, symbols=symbols, merge_symbols=False)
             try:
                 _broadcast_analysis({"analysis_event": "deriv_started", "message": "deriv worker started (control_start_deriv)"})
             except Exception:
@@ -3399,6 +3468,7 @@ def control_start_deriv():
         err_msg = (res.get("error") or res.get("message") or "").lower()
         if "already" in err_msg or "running" in err_msg:
             _log("control_start_deriv: worker already running (idempotent start accepted)")
+            _set_deriv_runtime_state(running=True, symbols=symbols, merge_symbols=(len(symbols) == 0))
             try:
                 _broadcast_analysis({"analysis_event": "deriv_started", "message": "deriv worker already running"})
             except Exception:
@@ -3429,6 +3499,7 @@ def control_stop_deriv():
             res = fut.result(timeout=3.0)
         except FuturesTimeoutError:
             _log("control_stop_deriv: stop_worker timed out after 3s; continuing in background")
+            _set_deriv_runtime_state(running=False, symbols=[], merge_symbols=False)
             def _bg_wait_and_log():
                 try:
                     rbg = fut.result(timeout=30.0)
@@ -3447,6 +3518,7 @@ def control_stop_deriv():
             return jsonify({"ok": True, "stopping": True, "note": "stop_worker running in background"}), 202
 
         if isinstance(res, dict) and res.get("ok"):
+            _set_deriv_runtime_state(running=False, symbols=[], merge_symbols=False)
             try:
                 _broadcast_analysis({"analysis_event": "deriv_stopped", "message": "deriv worker stopped"})
             except Exception:
@@ -3457,6 +3529,7 @@ def control_stop_deriv():
         try:
             err_txt = str((res or {}).get("error") or "").lower()
             if "no pidfile" in err_txt or "not running" in err_txt or "not found" in err_txt:
+                _set_deriv_runtime_state(running=False, symbols=[], merge_symbols=False)
                 return jsonify({"ok": True, "stopped": True, "note": "worker already stopped"}), 200
         except Exception:
             pass
@@ -3501,6 +3574,8 @@ def start_ticks():
             push_url=push_url,
             worker_script=worker_script
         )
+        if isinstance(res, dict) and res.get("ok"):
+            _set_deriv_runtime_state(running=True, symbols=symbols_list, merge_symbols=False)
         return jsonify(res)
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
@@ -3513,6 +3588,8 @@ def stop_ticks():
     """
     try:
         res = worker_manager.stop_worker()
+        if isinstance(res, dict) and (res.get("ok") or "not running" in str(res.get("error") or "").lower()):
+            _set_deriv_runtime_state(running=False, symbols=[], merge_symbols=False)
         return jsonify(res)
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
@@ -3654,6 +3731,7 @@ def control_runtime_status():
     Lightweight runtime state so UI can resync button/status text after page switches/reloads.
     """
     try:
+        state = _get_deriv_runtime_state()
         try:
             deriv_running = bool(worker_manager.is_worker_running())
         except Exception:
@@ -3665,8 +3743,33 @@ def control_runtime_status():
             last_tick = float(_last_tick_time or 0.0)
         tick_age = (now_ts - last_tick) if last_tick > 0 else None
         tick_heartbeat = bool(last_tick > 0 and tick_age is not None and tick_age <= max(12.0, (TICK_STALE_THRESHOLD * 2.0)))
+        expected_running = bool(state.get("expected_running"))
         if tick_heartbeat:
             deriv_running = True
+        elif expected_running:
+            deriv_running = True
+
+        running_symbols = list(state.get("running_symbols") or [])
+        if not running_symbols:
+            try:
+                with _recent_lock:
+                    recent = list(_recent_ticks)[-350:]
+                inferred = []
+                seen = set()
+                for r in reversed(recent):
+                    try:
+                        sym = str(r[6] or "").strip().upper()
+                    except Exception:
+                        sym = ""
+                    if not sym or sym == "ANALYSIS" or sym in seen:
+                        continue
+                    seen.add(sym)
+                    inferred.append(sym)
+                    if len(inferred) >= 30:
+                        break
+                running_symbols = sorted(inferred)
+            except Exception:
+                running_symbols = []
 
         analysis_running = bool(_analysis_running())
         ou_running = bool(getattr(OU_ENGINE, "enabled", False))
@@ -3675,7 +3778,9 @@ def control_runtime_status():
                 "ok": True,
                 "deriv_running": deriv_running,
                 "tick_heartbeat": bool(tick_heartbeat),
+                "expected_running": bool(expected_running),
                 "last_tick_age_sec": (round(float(tick_age), 3) if tick_age is not None else None),
+                "running_symbols": (running_symbols if deriv_running else []),
                 "analysis_running": analysis_running,
                 "ou_running": ou_running,
                 "analysis_pid": _read_analysis_pid(),
@@ -3837,6 +3942,13 @@ def push_tick():
     except Exception as e:
         _err(f"OU ingest_tick failed: {e}")
 
+    try:
+        ps = str(payload.get("symbol") or "").strip().upper()
+        if ps and ps != "ANALYSIS":
+            _set_deriv_runtime_state(running=True, symbols=[ps], merge_symbols=True)
+    except Exception:
+        pass
+
     # broadcast tick (payload now includes seq and enriched reason/indicators)
     _broadcast_tick(_enrich_tick_payload(payload))
 
@@ -3946,6 +4058,10 @@ def _shutdown_all_account_managers(timeout=3.0):
 def _signal_handler(signum, frame):
     try:
         _log(f"received signal {signum} - graceful shutdown")
+    except Exception:
+        pass
+    try:
+        _set_deriv_runtime_state(running=False, symbols=[], merge_symbols=False)
     except Exception:
         pass
     _shutdown_all_account_managers(timeout=3.0)
@@ -4081,6 +4197,10 @@ if __name__ == "__main__":
         _log("hero_service: running graceful shutdown")
         try:
             _stop_analysis_process()
+        except Exception:
+            pass
+        try:
+            _set_deriv_runtime_state(running=False, symbols=[], merge_symbols=False)
         except Exception:
             pass
         _shutdown_all_account_managers(timeout=3.0)
